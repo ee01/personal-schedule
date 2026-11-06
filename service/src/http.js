@@ -129,7 +129,9 @@ import path from 'node:path';
 function serveStatic(req, res, pathname, mount) {
   let relative = pathname;
   if (mount.prefix) {
-    if (pathname !== mount.prefix && !pathname.startsWith(mount.prefix + '/')) return false;
+    const pfx = mount.prefix || '';
+    if (pfx !== '' && pathname !== pfx && !pathname.startsWith(pfx + '/')) return false;
+    relative = pathname.slice(pfx.length);
     relative = pathname.slice(mount.prefix.length);
   }
   relative = relative.replace(/(^\/|\/$)/g, '') || 'index.html';
