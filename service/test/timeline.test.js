@@ -62,9 +62,17 @@ test('T3: date moved earlier, discovered within grace → immediate delayed fire
   const ctx = fresh();
   const releases = [{ release: 'mThor 26.4.0', date: '2026-12-20', milestones: [{ name: 'FF', date: '2099-01-01' }] }];
   seedCache(ctx, 'mThor', releases);
-  const task = addTimelineTask(ctx, { kind: 'timeline', project: 'mThor', milestone: 'FF', offsetDays: 0, time: '09:30', timezone: 'Asia/Shanghai' });
-  // now the date moves earlier to 1 hour ago (within 6h grace)
-  const past = new Date(Date.now() - 3600 * 1000).toISOString().slice(0, 10);
+  // build the moved-earlier wall time as "exactly 1 hour ago" expressed in the
+  // task timezone, so the test is clock- and timezone-independent (a naive
+  // UTC-date + fixed 09:30 can land beyond the 6h grace depending on run hour)
+  const instantMs = Date.now() - 3600 * 1000;
+  const inTz = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(instantMs));
+  const [ymd, hm] = inTz.split(', ');
+  const past = ymd.replace(/-/g, '-');
+  const task = addTimelineTask(ctx, { kind: 'timeline', project: 'mThor', milestone: 'FF', offsetDays: 0, time: hm, timezone: 'Asia/Shanghai' });
   seedCache(ctx, 'mThor', [{ release: 'mThor 26.4.0', date: '2026-12-20', milestones: [{ name: 'FF', date: past }] }]);
   await ctx.timeline.recomputeProject('mThor');
   const occ = ctx.db.prepare('SELECT * FROM occurrences WHERE task_id = ?').get(task.id);

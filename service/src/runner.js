@@ -83,6 +83,33 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
         `UPDATE occurrences SET status = 'needs_attention', finished_at = ?, error = 'dispatch outcome unknown (lease expired)', updated_at = ? WHERE id = ?`,
       ).run(now, now, row.id);
     }
+    // agent_task dispatched without an actionId receipt: the exact-run poll
+    // has nothing to poll. memory dispatches are idempotent by occurrence key,
+    // so a manual resend is safe and even recovers the run; multica has no
+    // receipt path at all (V3 pending) and is never auto-resolved.
+    const orphaned = db
+      .prepare(
+        `SELECT o.*, t.config AS task_config, t.title FROM occurrences o JOIN tasks t ON t.id = o.task_id
+         WHERE o.status = 'dispatched' AND t.type = 'agent_task' AND o.action_id IS NULL
+           AND COALESCE(o.lease_expires_at, 0) < ?
+           AND COALESCE(JSON_EXTRACT(t.config, '$.executor'), 'memory') = 'memory'`,
+      )
+      .all(now);
+    for (const row of orphaned) {
+      db.prepare(
+        `UPDATE occurrences SET status = 'needs_attention', finished_at = ?, error = ?, updated_at = ? WHERE id = ?`,
+      ).run(
+        now,
+        'agent run accepted without an actionId receipt (outcome unknown). manual resend is safe: the occurrence idempotency key reuses the same memory run',
+        now,
+        row.id,
+      );
+      onTaskNeedsAttention?.(
+        { id: row.task_id, user_id: row.user_id, title: row.title, type: 'agent_task', config: {} },
+        row,
+        `任务「${row.title}」执行入队结果未知（无 run 回执）。手动重发安全：幂等键会复用同一次 memory 运行。`,
+      );
+    }
   }
 
   // ---------------------------------------------------------- scheduling
@@ -133,6 +160,7 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
   // ---------------------------------------------------------- dispatch
 
   async function dispatchPending() {
+    const dispatches = [];
     const now = nowSec();
     const pending = db
       .prepare(
@@ -177,8 +205,13 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
       if (claimed.changes === 0) continue;
       const leased = db.prepare('SELECT * FROM occurrences WHERE id = ?').get(occurrence.id);
       inFlight.add(occurrence.id);
-      execute(task, leased, provider).finally(() => inFlight.delete(occurrence.id));
+      dispatches.push(execute(task, leased, provider).finally(() => inFlight.delete(occurrence.id)));
     }
+    // deterministic ticks: wait for the dispatches started in this tick so
+    // finalize/publish in the same tick observes their settled status. The
+    // batch runs concurrently (worst case ≈ one provider timeout), and a
+    // provider error never rejects the tick (allSettled).
+    await Promise.allSettled(dispatches);
   }
 
   async function execute(task, occurrence, provider) {
@@ -195,14 +228,23 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
         connections,
       });
       const status = result.status === 'dispatched' ? 'dispatched' : 'succeeded';
+      // memory agent enqueue returns the action id — persist it for exact-run
+      // result polling (never a task-level "latest" lookup)
+      const actionId = result?.evidence?.actionId || null;
       db.prepare(
-        `UPDATE occurrences SET status = ?, dispatched_at = ?, finished_at = ?, result = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+        `UPDATE occurrences SET status = ?, dispatched_at = ?, finished_at = ?, result = ?, action_id = COALESCE(?, action_id),
+           lease_owner = NULL, lease_expires_at = ?, updated_at = ?
          WHERE id = ?`,
       ).run(
         status,
         now,
         status === 'succeeded' ? now : null,
         JSON.stringify(result),
+        actionId,
+        // dispatched rows keep a lease deadline: if no receipt ever arrives
+        // (no actionId + lease expired), the occurrence is surfaced for
+        // attention instead of polling forever
+        status === 'dispatched' ? now + config.leaseSeconds : null,
         now,
         occurrence.id,
       );
@@ -231,13 +273,38 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
 
   // ---------------------------------------------------------- receipts
 
+  function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function exactRunResult(occRow, payload) {
+    // Only explicit publishable content becomes finalOutput/publishFields
+    // (E-184 contract): private summaries, narratives and logs never do.
+    // Fields stay absent when the executor did not return them.
+    const finalOutput = typeof (payload.finalOutput ?? payload.final_output) === 'string'
+      ? (payload.finalOutput ?? payload.final_output)
+      : undefined;
+    const publishFields = isPlainObject(payload.publishFields ?? payload.publish_fields)
+      ? (payload.publishFields ?? payload.publish_fields)
+      : undefined;
+    const runResult = {
+      status: payload.status === 'succeeded' ? 'succeeded' : 'failed',
+      summaryForOwner: typeof payload.summaryForOwner === 'string' ? payload.summaryForOwner : '',
+      attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+      runId: payload.runId || occRow.action_id,
+    };
+    if (finalOutput !== undefined) runResult.finalOutput = finalOutput;
+    if (publishFields !== undefined) runResult.publishFields = publishFields;
+    return runResult;
+  }
+
   async function pollDispatchedAgentTasks() {
     const now = nowSec();
+    // exact-run polling: each occurrence carries its own memory action id
     const rows = db
       .prepare(
-        `SELECT o.*, t.config AS task_config, t.notify AS task_notify, t.title, t.content FROM occurrences o
-         JOIN tasks t ON t.id = o.task_id
-         WHERE o.status = 'dispatched' AND t.type = 'agent_task'
+        `SELECT o.*, t.title FROM occurrences o JOIN tasks t ON t.id = o.task_id
+         WHERE o.status = 'dispatched' AND t.type = 'agent_task' AND o.action_id IS NOT NULL
          LIMIT 50`,
       )
       .all();
@@ -248,37 +315,56 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
       byUser.get(row.user_id).push(row);
     }
     for (const [userId, userRows] of byUser) {
-      const connections = getConnections(userId);
-      const memory = connections.memory;
+      const memory = getConnections(userId).memory;
       if (!memory) continue;
       const base = String(memory.baseUrl).replace(/\/+$/, '');
-      const ids = userRows.map((row) => row.task_id).join(',');
-      try {
-        const response = await fetch(`${base}/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(ids)}`, {
-          headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(config.httpTimeoutMs),
-        });
-        if (!response.ok) continue;
-        const payload = await response.json();
-        for (const row of userRows) {
-          const item = (payload.items || []).find(
-            (candidate) => candidate.sourceRefId === row.task_id || candidate.taskId === row.task_id,
+      for (const row of userRows) {
+        try {
+          const response = await fetch(`${base}/api/v1/agent-tasks/runs/${encodeURIComponent(row.action_id)}/result`, {
+            headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
+            signal: AbortSignal.timeout(config.httpTimeoutMs),
+          });
+          if (response.status === 404) {
+            // run not visible in this user's database — keep waiting this
+            // tick; surfaced via logs, never auto-failed on a 404 alone
+            console.warn(`[runner] exact-run 404 for action ${row.action_id} (occurrence ${row.id})`);
+            continue;
+          }
+          if (!response.ok) continue;
+          const payload = await response.json();
+          // occurrence-key match: never bind a run that belongs to another
+          // occurrence of the same task (overlapping runs) or another task
+          const keyMismatch =
+            (payload.scheduleSpec && payload.scheduleSpec !== row.occ_key) ||
+            (payload.taskId && payload.taskId !== row.task_id);
+          if (keyMismatch) {
+            db.prepare(
+              `UPDATE occurrences SET status = 'needs_attention', finished_at = ?, error = ?, updated_at = ? WHERE id = ?`,
+            ).run(
+              now,
+              JSON.stringify({ reason: 'run_key_mismatch', expected: { occKey: row.occ_key, taskId: row.task_id }, got: { scheduleSpec: payload.scheduleSpec, taskId: payload.taskId } }),
+              now,
+              row.id,
+            );
+            onTaskNeedsAttention?.(
+              { id: row.task_id, user_id: row.user_id, title: row.title, type: 'agent_task', config: {} },
+              row,
+              `任务「${row.title}」运行回执与本次调度不匹配（未发布、未重发），需要人工检查。`,
+            );
+            continue;
+          }
+          const status = String(payload.status || '');
+          if (!['succeeded', 'failed', 'dead_letter'].includes(status)) continue; // still running
+          db.prepare(`UPDATE occurrences SET status = ?, finished_at = ?, result = ?, updated_at = ? WHERE id = ?`).run(
+            status === 'succeeded' ? 'succeeded' : 'failed',
+            now,
+            JSON.stringify(exactRunResult(row, payload)),
+            now,
+            row.id,
           );
-          if (!item?.latestAction) continue;
-          const queueStatus = item.latestAction.queueStatus;
-          if (!['succeeded', 'failed', 'dead_letter'].includes(queueStatus)) continue;
-          const runResult = {
-            status: queueStatus === 'succeeded' ? 'succeeded' : 'failed',
-            summaryForOwner: item.summary || item.latestAction.lastError || '',
-            finalOutput: item.summary || '',
-            attachments: item.evidence ? [item.evidence] : [],
-          };
-          db.prepare(
-            `UPDATE occurrences SET status = ?, finished_at = ?, result = ?, updated_at = ? WHERE id = ?`,
-          ).run(runResult.status === 'succeeded' ? 'succeeded' : 'failed', now, JSON.stringify(runResult), now, row.id);
+        } catch (error) {
+          console.error('[runner] exact-run poll failed:', error.message);
         }
-      } catch (error) {
-        console.error('[runner] runtime-status poll failed:', error.message);
       }
     }
   }

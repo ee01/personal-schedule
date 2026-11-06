@@ -224,16 +224,37 @@ export const providers = {
             timeoutMs: task.config.timeoutMs || undefined,
             notify: notify.notifyMe?.mode !== 'off',
             successReceipt: notify.notifyMe?.mode === 'every' ? true : notify.notifyMe?.mode === 'failures' ? false : undefined,
+            // template-mode publishing: the field contract travels to the
+            // executor's system result convention (max 32 unique fields);
+            // recipients/credentials never enter the executor prompt
+            publishTemplate:
+              notify.publish?.enabled && notify.publish.source === 'template' && Array.isArray(notify.publish.template)
+                ? notify.publish.template.slice(0, 32).map((field) => ({
+                    name: field.name,
+                    note: field.note || '',
+                    required: field.required !== false,
+                  }))
+                : undefined,
             // Publishing is performed by Schedule Service itself (3.8.4) with
             // field validation + publish state machine; do not ask memory to
             // send group output — that would bypass publish_paused/retry.
           },
         });
         if (!response.ok) throw new HttpError(502, `memory agent-tasks/execute failed (${response.status}): ${response.json?.error || ''}`);
+        // the enqueue response carries actionId/runId/resultUrl — persisting
+        // the action id lets the runner poll the *exact* run
+        // (/agent-tasks/runs/:id/result) instead of guessing from task-level
+        // "latest", which can bind the wrong overlapping run
+        const actionId = response.json?.actionId || response.json?.runId || null;
         return {
           status: 'dispatched',
           summaryForOwner: '帮我做任务已提交到 memory-service 执行队列（202 入队）',
-          evidence: { accepted: true, reused: response.json?.reused === true },
+          evidence: {
+            accepted: true,
+            reused: response.json?.reused === true,
+            actionId,
+            resultUrl: response.json?.resultUrl || null,
+          },
         };
       }
       if (executor === 'multica') {

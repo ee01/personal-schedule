@@ -120,10 +120,28 @@ async function doImport(){
   }
 }
 
-// extension handshake (H9): the Personal AI extension announces itself; the
-// page passes the share token so the extension can continue the import with
-// the receiver's own identity (site-authorized token, spec 8.6).
+// extension presence (E-184 new handshake): the Personal AI extension's
+// content script announces
+//   {channel:'personal-schedule-extension-v1', type:'ready', version, schemaVersion}
+// with this page's origin as the target. The page listens and never replies on
+// that channel — the old 'personal-schedule' window channel is retired (its
+// handler replied to every message and echoed indefinitely). Credentials and
+// imports go through authenticated extension runtime messaging; the
+// extension builds its own receiver-owned import panel from the /share/:token
+// URL. This page's own login+import below stays equivalent for no-extension
+// users.
 const extState = { phase: 'install', version: null }; // install → waiting → ready | upgrade
+
+function versionOlder(version, min) {
+  const parse = (v) => String(v || '0').split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(version);
+  const b = parse(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff < 0;
+  }
+  return false;
+}
 
 function saveSelection() {
   try {
@@ -172,16 +190,16 @@ function renderExtPhase() {
 }
 
 window.addEventListener('message', (event) => {
-  if (event.data?.channel !== 'personal-schedule') return;
-  // extension announces itself with its version
-  extState.version = event.data.version || null;
+  if (event.origin !== location.origin) return; // announcement targets this page's origin only
+  const data = event.data;
+  if (!data || data.channel !== 'personal-schedule-extension-v1' || data.type !== 'ready') return;
+  extState.version = data.version || null;
   const minV = String(extInfo.handshake?.minExtensionVersion || '0');
-  const older = extState.version && String(extState.version) < minV;
+  const older = extState.version && versionOlder(extState.version, minV);
   extState.phase = older ? 'upgrade' : 'ready';
   renderExtPhase();
-  event.source.postMessage({ channel: 'personal-schedule', type: 'share-page', shareToken: state.token, schemaVersion: state.data?.schemaVersion }, '*');
+  // no reply: this channel is announcement-only (old-channel echo retired)
 });
-window.__PERSONAL_SCHEDULE__ = { product: 'personal-schedule', version: '0.1.0', getShareToken: () => state.token };
 
 let extInfo = { extInstallUrl: null, handshake: null };
 async function boot() {

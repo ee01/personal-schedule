@@ -150,6 +150,25 @@ CREATE TABLE timeline_cache (
 );
 `,
   },
+  {
+    // v2 (E-184 contract alignment):
+    // - occurrences.action_id: memory agent run receipt (exact-run result
+    //   polling /agent-tasks/runs/:id/result; task-level "latest" lookup
+    //   could bind the wrong overlapping run)
+    // - task_create_keys: per-owner task-create idempotency (extension can
+    //   drop its unknown-outcome manual reconciliation guard)
+    version: 2,
+    up: `
+ALTER TABLE occurrences ADD COLUMN action_id TEXT;
+CREATE TABLE task_create_keys (
+  user_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+`,
+  },
 ];
 
 function migrate(db) {

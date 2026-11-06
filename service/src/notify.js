@@ -70,17 +70,20 @@ export function createNotify(db, { publicBaseUrl }) {
     }
     // template mode
     const fields = publish.template || [];
-    const values = runResult.publishFields || null;
-    if (!values) {
-      // The structured publishFields contract on the executor result is
-      // pending the memory-service side extension (see contract doc). We pause
-      // instead of guessing from logs.
-      return { ok: false, reason: 'publish_fields_unavailable', needsMemoryContract: true };
+    // publishFields is an OBJECT (field name → value), per the memory result
+    // contract — never an array, and never synthesized from logs/summaries
+    const values = runResult.publishFields;
+    if (!values || typeof values !== 'object' || Array.isArray(values)) {
+      // The executor did not return explicit publish fields — we pause
+      // instead of guessing from logs or summaries.
+      return { ok: false, reason: 'publish_fields_unavailable' };
     }
-    const byName = new Map(values.map((field) => [field.name, field.value]));
-    const missing = fields.filter((field) => field.required && !String(byName.get(field.name) || '').trim()).map((field) => field.name);
+    const byName = values;
+    const missing = fields
+      .filter((field) => field.required && !String(byName[field.name] ?? '').trim())
+      .map((field) => field.name);
     if (missing.length) return { ok: false, reason: 'missing_required_fields', missing };
-    const body = fields.map((field) => `${field.name}: ${byName.get(field.name) ?? ''}`).join('\n');
+    const body = fields.map((field) => `${field.name}: ${byName[field.name] ?? ''}`).join('\n');
     return { ok: true, body };
   }
 

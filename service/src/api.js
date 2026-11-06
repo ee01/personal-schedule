@@ -36,7 +36,19 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     version: '0.1.0',
     schemaVersion: 1,
     publicUrl: publicBaseUrl(),
-    handshake: { method: 'postMessage', channel: 'personal-schedule', minExtensionVersion: '0.1.0' },
+    // new presence protocol (E-184): the extension announces
+    // {channel:'personal-schedule-extension-v1', type:'ready', version,
+    //  schemaVersion} with the page origin as target. The old
+    // 'personal-schedule' window channel is retired — its handler replied
+    // to every message on that channel and echoed indefinitely; the share
+    // page listens to the announcement and never responds on it.
+    handshake: {
+      method: 'postMessage',
+      channel: 'personal-schedule-extension-v1',
+      announcementType: 'ready',
+      targetOrigin: 'window-origin',
+      minExtensionVersion: '0.1.0',
+    },
     // empty string = install URL not yet configured for this deployment
     // (the share page falls back to a generic install-guide card)
     extInstallUrl: config.extInstallUrl || null,
@@ -121,9 +133,11 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
 
   app.post('/api/v1/tasks', (req) => {
     const user = requireUser(db, auth, req);
-    const { task, missing } = store.createTask(user.id, req.body);
+    // idempotencyKey (per-owner) makes unknown create outcomes safely
+    // retryable: a replay returns the first task instead of a duplicate
+    const { task, missing, replayed } = store.createTask(user.id, req.body);
     schedulePreview(task.id);
-    return { task, missing };
+    return { task, missing, replayed: replayed === true };
   });
 
   app.get('/api/v1/tasks/{id}', (req) => {
@@ -153,6 +167,35 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const task = store.setStatus(user.id, req.params.id, status);
     schedulePreview(task.id);
     return { task };
+  });
+
+  // ------------------------------------------------------------ jira import completion (gap ②)
+  // Authenticated route the extension drives after importing the reviewed
+  // rule into the receiver's target JIRA project. The import logic itself
+  // lives in the extension (scheduleJira.ts) — this records state/binding
+  // and gates activation; the web completion UI opens the extension Options
+  // section instead of duplicating the import here.
+  app.post('/api/v1/tasks/{id}/jira-import', (req) => {
+    const user = requireUser(db, auth, req);
+    const body = req.body || {};
+    const task = store.updateJiraImport(user.id, req.params.id, {
+      state: body.state,
+      targetRuleId: body.targetRuleId,
+      targetProjectId: body.targetProjectId,
+      targetJiraUrl: body.targetJiraUrl,
+      webhookUrl: body.webhookUrl,
+      marker: body.marker,
+    });
+    schedulePreview(task.id);
+    return {
+      task,
+      activationGate: {
+        jiraImportState: task.config.jiraImportState || null,
+        // activation stays blocked until state is 'completed' AND webhookUrl
+        // is bound; `missing` lists the exact gating entries
+        missing: task.missing,
+      },
+    };
   });
 
   app.post('/api/v1/tasks/{id}/trial', (req) => {

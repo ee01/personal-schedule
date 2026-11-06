@@ -86,7 +86,7 @@ test('final_output publish: missing output pauses publish, never dumps run logs'
   assert.equal(stored.publish_status, 'publish_paused');
 });
 
-test('template publish: missing required field pauses with field list', async () => {
+test('template publish: missing required field pauses with field list (object publishFields contract)', async () => {
   const ctx = fresh();
   const task = ctx.store.decodeTask(
     addAgentTask(ctx, {
@@ -104,15 +104,74 @@ test('template publish: missing required field pauses with field list', async ()
       },
     }),
   );
+  // publishFields is an OBJECT (field name → value) per the memory result
+  // contract — '风险' missing here
   const occurrence = addOccurrence(ctx, task, {
     status: 'succeeded',
     summaryForOwner: 'ok',
-    publishFields: [{ name: '标题', value: '周报' }, { name: '备注', value: 'x' }], // 风险 missing
+    publishFields: { '标题': '周报', '备注': 'x' },
   });
   const outcome = await ctx.notify.publishForOccurrence(task, occurrence);
   assert.equal(outcome.paused, true);
   assert.equal(outcome.validation.reason, 'missing_required_fields');
   assert.deepEqual(outcome.validation.missing, ['风险']);
+});
+
+test('template publish: object publishFields renders the configured fields', async () => {
+  const ctx = fresh();
+  const task = ctx.store.decodeTask(
+    addAgentTask(ctx, {
+      notifyMe: { mode: 'every' },
+      publish: {
+        enabled: true,
+        recipients: [{ chatId: 'group-1' }],
+        identity: 'user',
+        source: 'template',
+        template: [
+          { name: '标题', required: true },
+          { name: '备注', required: false },
+        ],
+      },
+    }),
+  );
+  const occurrence = addOccurrence(ctx, task, {
+    status: 'succeeded',
+    summaryForOwner: '私有摘要（绝不能成为发布正文）',
+    publishFields: { '标题': '查询简报', '备注': '无' },
+  });
+  const deliveries = [];
+  const original = providers.asme.run;
+  providers.asme.run = async ({ task: inner }) => {
+    deliveries.push(inner.config.chatId);
+    return { status: 'succeeded', evidence: { postId: 'p1' } };
+  };
+  try {
+    const outcome = await ctx.notify.publishForOccurrence(task, occurrence);
+    assert.equal(outcome.published, true);
+    assert.deepEqual(deliveries, ['group-1']);
+    const stored = ctx.db.prepare('SELECT * FROM occurrences WHERE id = ?').get(occurrence.id);
+    assert.equal(stored.publish_status, 'published');
+  } finally {
+    providers.asme.run = original;
+  }
+});
+
+test('template publish: array-shaped publishFields is treated as unavailable, not guessed', async () => {
+  const ctx = fresh();
+  const task = ctx.store.decodeTask(
+    addAgentTask(ctx, {
+      notifyMe: { mode: 'every' },
+      publish: { enabled: true, recipients: [{ chatId: 'g' }], identity: 'user', source: 'template', template: [{ name: '标题', required: true }] },
+    }),
+  );
+  const occurrence = addOccurrence(ctx, task, {
+    status: 'succeeded',
+    summaryForOwner: 'ok',
+    publishFields: [{ name: '标题', value: '旧数组形状' }], // legacy array — contract says object
+  });
+  const outcome = await ctx.notify.publishForOccurrence(task, occurrence);
+  assert.equal(outcome.paused, true);
+  assert.equal(outcome.validation.reason, 'publish_fields_unavailable');
 });
 
 test('template publish: no publishFields from executor → paused pending memory contract', async () => {

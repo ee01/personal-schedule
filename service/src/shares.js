@@ -5,6 +5,7 @@
 // only ever sees an import count, never receiver identities.
 import { newId, newToken, nowSec, parseJson, badRequest, notFound, forbidden, sensitivityFlag } from './util.js';
 import { validateScheduleSpec } from './time.js';
+import { sanitizeJiraRuleExport } from './jiraShare.js';
 
 export const SHARE_SCHEMA_VERSION = 1;
 
@@ -13,6 +14,13 @@ export function createShares(db, { getConnections }) {
     const config = parseJson(task.config, {});
     const notify = parseJson(task.notify, {});
     const spec = parseJson(task.schedule_spec, {});
+    // gap ①: carry the explicitly authorized, sanitized rule export so
+    // receivers without source-project permissions can still import the
+    // rule into their own target project. Only `jiraRuleRef` traveled
+    // before — that loses the rule for those receivers.
+    const exportCheck = task.type === 'jira_automation' && config.jiraRuleExport
+      ? sanitizeJiraRuleExport(config.jiraRuleExport)
+      : null;
     const view = {
       refKey: task.ref_key || task.id,
       type: task.type,
@@ -38,13 +46,20 @@ export function createShares(db, { getConnections }) {
             : task.type === 'jira_automation'
               ? 'jira'
               : 'rc',
-      // For hosted JIRA automations: carry only the source rule reference so
-      // the receiver's completion flow can pick a target project and let the
-      // extension export+import the rule (no secrets travel with the view).
+      // For hosted JIRA automations: the source rule reference (informational)
+      // plus the owner-reviewed sanitized rule export. The share is a live
+      // view of the owner's *current* task config — the artifact reflects the
+      // source rule as of its own preparedAt, and source edits outside
+      // Schedule need an authenticated owner-side re-preparation. No secrets
+      // or actor identities travel with the view (server-side re-sanitized).
       jiraRuleRef:
         task.type === 'jira_automation' && config.jiraRuleRef
           ? { jiraUrl: config.jiraRuleRef.jiraUrl, projectId: config.jiraRuleRef.projectId, ruleId: config.jiraRuleRef.ruleId }
           : null,
+      jiraRuleExport: exportCheck?.ok ? exportCheck.artifact : null,
+      // a rejected artifact is surfaced explicitly instead of silently
+      // degrading to a reference-only share
+      jiraRuleExportRejected: exportCheck && !exportCheck.ok ? exportCheck.reason : null,
       recipientRole: describeRecipientRole(task.type, config),
       sensitivity: sensitivityFlag(`${task.title}\n${task.content}`),
     };
@@ -188,6 +203,21 @@ export function createShares(db, { getConnections }) {
     const store = createTaskStore(db, getConnections);
     for (const candidate of [...fresh, ...(confirmDuplicates ? duplicates : [])]) {
       snapshot.push(candidate);
+      // 缺材料不创建：a jira_automation candidate without the reviewed rule
+      // export material cannot be imported — `jiraRuleRef` alone intentionally
+      // fails completion for receivers without source-project permissions, so
+      // creating a shell task would only strand the receiver (E-184 contract;
+      // accepted-item 2). It is skipped with an explicit reason instead.
+      if (candidate.type === 'jira_automation' && !candidate.jiraRuleExport) {
+        results.push({
+          refKey: candidate.refKey,
+          status: 'failed',
+          reason: candidate.jiraRuleExportRejected
+            ? `规则材料未通过安全校验（${candidate.jiraRuleExportRejected}），未创建`
+            : '缺少已审查的 JIRA 规则材料（jiraRuleExport），未创建',
+        });
+        continue;
+      }
       try {
         validateScheduleSpec(candidate.scheduleSpec);
         const input = {
@@ -197,7 +227,17 @@ export function createShares(db, { getConnections }) {
           scheduleSpec: candidate.scheduleSpec,
           // recipient/credential fields are stripped in the template view; the
           // copy starts inactive until the receiver rebinds them (8.5)
-          config: candidate.type === 'jira_automation' ? { jiraRuleRef: candidate.jiraRuleRef } : stripRuntimeConfig(candidate.type, {}),
+          // jira_automation: retain the reviewed export material (gap ①) and
+          // start the import state machine (gap ②) — activation is gated until
+          // the receiver completes the target-project import
+          config:
+            candidate.type === 'jira_automation'
+              ? {
+                  jiraRuleRef: candidate.jiraRuleRef,
+                  jiraRuleExport: candidate.jiraRuleExport || null,
+                  jiraImportState: 'pending_target',
+                }
+              : stripRuntimeConfig(candidate.type, {}),
           notify: candidate.type === 'agent_task'
             ? {
                 notifyMe: candidate.notifyShape?.notifyMe || { mode: 'every' },
@@ -329,8 +369,8 @@ function stripRuntimeConfig(type, config) {
   }
   if (type === 'agent_task') out.executor = undefined;
   if (type === 'jira_automation') {
-    // receiver picks their own target project; the extension exports the
-    // original rule and imports a webhook-triggered copy (E-184 contract)
+    // receiver picks their own target project; the reviewed export material
+    // and source ref travel via the template view (see templateView/import)
     out.jiraRuleRef = config.jiraRuleRef || null;
   }
   return out;

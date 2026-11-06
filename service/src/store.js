@@ -1,8 +1,12 @@
 // Task & tag store: validation, missing-config computation, views.
 import { newId, nowSec, parseJson, badRequest, notFound, forbidden } from './util.js';
 import { validateScheduleSpec } from './time.js';
+import { jiraImportGating, assertJiraImportTransition, JIRA_IMPORT_STATES } from './jiraShare.js';
 
 export const TASK_TYPES = ['asme', 'bot', 'ai_report', 'outreach', 'agent_task', 'jira_automation'];
+// Types offered by the web create form. jira_automation is still creatable
+// via the authenticated API (JIRA hosting flow / share import) — it is just
+// not a plain-form type.
 export const CREATABLE_TYPES = ['asme', 'bot', 'ai_report', 'outreach', 'agent_task'];
 
 export function createTaskStore(db, getConnection) {
@@ -88,6 +92,10 @@ export function createTaskStore(db, getConnection) {
         missing.push('executor');
       }
     } else if (type === 'jira_automation') {
+      // gap ②: the import state participates in activation gating — a
+      // webhook URL alone does not prove target field/permission review or
+      // that the disabled JIRA rule has been enabled by a human
+      missing.push(...jiraImportGating(config));
       if (!config.webhookUrl) missing.push('webhookUrl');
     }
     const publish = notify?.publish;
@@ -101,11 +109,24 @@ export function createTaskStore(db, getConnection) {
 
   function createTask(userId, input) {
     const type = input.type;
-    if (!CREATABLE_TYPES.includes(type)) {
-      if (type !== 'jira_automation') throw badRequest(`type must be one of ${CREATABLE_TYPES.join(', ')}`);
-      throw badRequest('jira_automation tasks are created via the JIRA hosting flow, not the create form');
+    if (!TASK_TYPES.includes(type)) {
+      throw badRequest(`type must be one of ${TASK_TYPES.join(', ')}`);
     }
     if (!input.title || typeof input.title !== 'string') throw badRequest('title required');
+    // per-owner task-create idempotency (E-184 contract item 5): an unknown
+    // create outcome can be safely retried; a replay returns the first task
+    const idemKey = typeof input.idempotencyKey === 'string' && input.idempotencyKey.trim()
+      ? input.idempotencyKey.trim().slice(0, 200)
+      : null;
+    if (idemKey) {
+      const prior = db.prepare('SELECT task_id FROM task_create_keys WHERE user_id = ? AND key = ?').get(userId, idemKey);
+      if (prior) {
+        const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(prior.task_id);
+        if (existing && existing.user_id === userId) {
+          return { task: decodeTask(existing), missing: parseJson(existing.missing, []), replayed: true };
+        }
+      }
+    }
     const scheduleSpec = input.scheduleSpec || {};
     validateScheduleSpec(scheduleSpec);
     const config = input.config || {};
@@ -142,6 +163,10 @@ export function createTaskStore(db, getConnection) {
       task.revision, task.origin, task.ref_key, task.source_share_id, task.missing, now, now,
     );
     setTaskTags(userId, task.id, input.tagIds || []);
+    if (idemKey) {
+      db.prepare('INSERT OR IGNORE INTO task_create_keys (user_id, key, task_id, created_at) VALUES (?,?,?,?)')
+        .run(userId, idemKey, task.id, now);
+    }
     return { task: decodeTask(task), missing };
   }
 
@@ -189,6 +214,56 @@ export function createTaskStore(db, getConnection) {
     );
     if (Array.isArray(patch.tagIds)) setTaskTags(userId, taskId, patch.tagIds);
     return decodeTask(db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId));
+  }
+
+  // ------------------------------------------------------------ jira import completion (gap ②)
+
+  // Authenticated state transitions driven by the extension's target-JIRA
+  // import (scheduleJira.ts implementation stays on the extension side —
+  // this service records state/binding and gates activation, it never
+  // duplicates the import logic).
+  //
+  // pending_target → created_disabled_needs_review (disabled copy exists in
+  // the target project; receiver must review fields/permissions and enable
+  // it there) → completed (human confirmed; webhookUrl + target rule bound).
+  function updateJiraImport(userId, taskId, { state, targetRuleId, targetProjectId, targetJiraUrl, webhookUrl, marker }) {
+    const task = getUserTask(userId, taskId);
+    const current = decodeTask(task);
+    if (task.type !== 'jira_automation') throw badRequest('jira-import state only applies to jira_automation tasks');
+    if (!JIRA_IMPORT_STATES.includes(state)) {
+      throw badRequest(`state must be one of ${JIRA_IMPORT_STATES.join(', ')}`);
+    }
+    assertJiraImportTransition(current.config.jiraImportState || null, state);
+    if (state === 'created_disabled_needs_review' && !targetRuleId) {
+      throw badRequest('targetRuleId is required when reporting the disabled target copy');
+    }
+    if (state === 'completed') {
+      if (!targetRuleId) throw badRequest('targetRuleId is required to complete the import');
+      if (!webhookUrl || !/^https?:\/\//.test(String(webhookUrl))) {
+        throw badRequest('the target rule webhook trigger URL is required to bind the receiver task');
+      }
+    }
+    const http = (value, max) => {
+      const text = String(value || '').trim();
+      if (!text) return undefined;
+      if (!/^https?:\/\//.test(text)) throw badRequest('URLs must be http(s)');
+      return text.slice(0, max);
+    };
+    const config = {
+      ...current.config,
+      jiraImportState: state,
+      jiraTarget: {
+        ...(current.config.jiraTarget || {}),
+        ...(targetRuleId !== undefined && targetRuleId !== null ? { ruleId: String(targetRuleId).slice(0, 64) } : {}),
+        ...(targetProjectId !== undefined && targetProjectId !== null ? { projectId: String(targetProjectId).slice(0, 64) } : {}),
+        ...(targetJiraUrl !== undefined && targetJiraUrl !== null ? { jiraUrl: http(targetJiraUrl, 500) } : {}),
+        ...(marker !== undefined && marker !== null ? { marker: String(marker).slice(0, 255) } : {}),
+        ...(state !== 'completed' ? { disabledCopyReportedAt: nowSec() } : { completedAt: nowSec() }),
+      },
+    };
+    const boundWebhook = state === 'completed' ? http(webhookUrl, 1000) : current.config.webhookUrl;
+    if (boundWebhook) config.webhookUrl = boundWebhook;
+    return updateTask(userId, taskId, { config });
   }
 
   function setStatus(userId, taskId, status) {
@@ -269,6 +344,7 @@ export function createTaskStore(db, getConnection) {
     deleteTask,
     listTasks,
     recomputeMissing,
+    updateJiraImport,
   };
 }
 
