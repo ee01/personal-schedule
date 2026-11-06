@@ -162,3 +162,11 @@
 - **G5**：分享页三处原生弹窗全部替换为站内组件——无效 token → 站内"分享不可用"状态卡；未选任务 → 站内 toast"请至少勾选一个任务"；重复导入 → 站内确认框（列出已导入任务、确认后创建副本，语义与原 confirm 一致）。浏览器实测四场景全过、零原生弹窗。
 - **追问链接入（Sol 222dfe13）**：`/tasks/:id/chain` 转发新增 `includeHistory=1`（发现并修复空值 includeHistory 导致 memory 400 的代理 bug）；选中运行时透传精确 `occurrenceKey`；动作转发前核验会话属于该任务。详情抽屉追问链 tab 拉真实会话/事件历史。
 - **双侧部署**：memory-service 部署 222dfe13（跨服务测试 14/15 过，1 skip 为条件跳过）；schedule 部署 441dea7（65/65）。资源指纹：index.html 5fb6e616…、app.js a7200e07…、share/index.html 47093c59…。
+
+## 2026-11-07 · 上限 +2 接入轮（完成，双侧部署）
+
+- **Memory `68425cfc` 已部署**（canonical 脚本；Sol 套件 44/44 通过）。
+- **Schedule 侧接入**：`/tasks/:id/chain/actions` 新增 `increase_followup_limit` 动作——归属校验后转发 `{requestId, expectedMaxFollowup}`；409 作为显式冲突信号返回（`conflict:true`），不自动换 requestId 重试。
+- **UI**：追问链视图仅对 waiting_reply/deferred 会话显示"追问上限 +2（不立即发送）"按钮；每次点击生成并复用同一 requestId；成功后以原历史源刷新、不标记"已发送"；修复抽屉 Tab 按钮绑定时机（渲染后再绑定）。
+- **浏览器验证**：追问链 tab 渲染真实会话（pending_approval 第 1/2 轮）；+2 完整点击链路需要可控的 waiting 会话——approve 返回 500"Target is not configured"（测试 pak 无 RC 目标绑定），属受控凭据缺口，如实单列，不伪造通过。composer 独立浏览器验收可复用 `deploy/browser-verification.mjs`。
+- 65/65 测试；部署指纹：/app=`5fb6e616…`、/app/app.js=`286a4a3c…`、/share/index.html=`47093c59…`。
