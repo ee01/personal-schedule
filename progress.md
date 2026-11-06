@@ -123,3 +123,11 @@
 - 登录桥契约（与 E-184 单一接口）：页面以访客会话注册一次性 nonce（/auth/bridge/register）→ 扩展校验页面来源后携 PAT+nonce 调 /auth/bridge/exchange → 服务端单次消费 nonce、PAT 必需、轮换会话；PAT 不进页面 JS；受信 HTTPS 前保持禁用（/auth/meta.loginBridge.enabled=false，UI 按钮如实禁用）。
 - 回归证据（9 项 auth 测试）：生产拒绝且零验证码入库、验证码并发重放仅一次成功、会话轮换、既有账号登录不重复建号且重复登录不重复任务、访客三重阻断、迁移前 NULL token_id 会话吊销例外。
 - 部署验证：/auth/meta（devFallback:false、loginBridge.enabled:false）、邮箱请求拒绝文案、桥拒绝、访客任务 inactive、凭据绑定阻断。
+
+## 2026-11-06 · 桥绑定与域名门修复轮（Sol 联调发现，64/64，已部署）
+
+- nonce↔会话原子绑定（迁移 v6）：注册时绑定发起会话，交换必须携带同一会话且为该访客——B 消费 A 的 nonce、无 Cookie 消费、非访客会话交换均拒；首次注册生效（不可覆盖）；DELETE 消费含 session_id 条件。
+- 桥端点 Origin 校验（SameSite=Lax 之上的纵深防御；无 Origin 的扩展后台调用放行）。
+- 域名白名单改为注册门：既有账号（E 的 a@eexx.me）邮箱登录路径解锁——线上实测域门已过，仅剩发信配置门。
+- 回归：Sol 报告的攻击面全部覆盖（B 消费/无 cookie/覆盖/非访客交换/合法流/重放）+ E-case 白名单绕过；64/64。
+- 未改动桥启用条件（受信 HTTPS 前 /auth/meta.loginBridge.enabled=false）；E-184 可按契约复验。
