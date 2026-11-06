@@ -84,3 +84,10 @@
 - 浏览器验证：Playwright（chromium）7 张主要流程截图（任务列表/创建（帮我做含两区域）/详情抽屉（运行记录+发布态）/设置/标签/公开分享页/需要补全视图），无 JS 错误。
 - RC/Multica/Memory/JIRA 授权入口、所需材料、续期行为与受控测试对象整理入 docs/operations/connections.md（优先复用已授权连接：Bot 自动续期、AsMe 需重授权或经 E-184 桥、Multica 仅需 webhook URL+binding 标识，无需 PAT）。
 - 已部署 http://schedule.xmnup.com/。
+
+## 2026-11-06 · E-183 HTTPS 补齐（响应用户反馈）
+
+- 用户反馈看不到站点。诊断：http:// 一直可用；**https:// 无证书**，浏览器自动升级导致打不开。
+- 处理：为 schedule.xmnup.com 生自签证书（825 天，SAN schedule.xmnup.com）→ NPM certificate id 8（provider other，与 task/claw 同模式）→ proxy host 13 绑定，conf 13 增加 listen 443 ssl，nginx -t 通过后 reload；http 与 https 双通（实测）。
+- deploy.sh nginx 步骤改为幂等生成 ssl 配置块与证书（重跑不丢 https）；deployment.md 更新。
+- 顺带观察（非本次改动影响）：milo.xmnup.com 502 为既有问题（其上游 8100 无服务）。

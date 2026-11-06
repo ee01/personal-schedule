@@ -14,6 +14,7 @@
 | 数据 | `/Users/rcadmin/personal-schedule/data/schedule.db`（SQLite WAL）+ 同目录内 `settings`（timeline 源等） |
 | 日志 | `~/personal-schedule/schedule.log` / `schedule.err.log` |
 | 反向代理 | **Nginx Proxy Manager**（docker 容器 `nginxproxymanager-app-1`，占用宿主 80/81/443）。**容器访问不到宿主 loopback**，upstream 必须写 `10.32.56.212:3230`（与其他 12 个站点一致） |
+| HTTPS | 443 已启用，自签证书（`data/custom_ssl/npm-schedule/`，NPM certificate id 8，proxy host 13 `certificate_id=8`，`ssl_forced=0` 即 http/https 均可）。与 task/claw 同模式；如需受信任证书（milo 为 DigiCert 实证书），在 NPM 上替换后重跑 `deploy.sh nginx` 会保留 ssl 配置块 |
 | NPM 数据 | `~/nginxproxymanager/data/database.sqlite` + `data/nginx/proxy_host/<id>.conf`（nginx 实际加载的是 conf 文件；DB 行保持管理界面一致） |
 
 ## 部署/升级（可重复执行）

@@ -1,0 +1,5 @@
+既有 Personal AI 提交 c2865ffd/72d4dd6a 已实现 occurrence 和 exact-run result 接口。本轮不重复实现、不修改 glm 管理的 Schedule runtime。发现：Schedule result polling 按 task-level latest，summary 被误作 finalOutput；Memory publish_fields 为对象，Schedule validatePublish 使用数组.map；未透传消息模板；Schedule 对 Memory 委托未带 notifyTarget 时仍可能命中旧 notify-config 群投递。需明确 Memory owner receipt、Schedule only publish、Outreach Memory sole first ask/followup/session notices。E-184 恢复 in_progress。
+
+Schedule V0.1 未对齐四处：provider 不保存 actionId/runId；轮询 task-level latest 且 summary 被作 finalOutput；notify.validatePublish 认为 publishFields 是数组，Memory 明确对象；未发送 publishTemplate。Memory 本轮已支持可选 notificationOwner（默认 memory，若 schedule_service 则完全抑制 Memory owner 通知）、独占 Schedule 发布（即使 body/旧配置有群目标）、模板仅注入系统结果约定、精确结果 schemaVersion/summary_for_owner/显式正文/字段/附件。JIRA 仅引用无内容路径明确拒绝，不向源域发送接收方凭据。
+
+实际 Schedule HTTP 复现额外发现：POST /tasks type jira_automation 返回 400（store.createTask 限 CREATABLE_TYPES，且无单独托管 route）；share import 同样走该门禁，无法创建 JIRA 草稿。已通过只在内存 DB 预置一条托管样本验证 share view 丢弃已审查 jiraRuleExport。此项交 glm 服务侧修复，不改其 runtime。

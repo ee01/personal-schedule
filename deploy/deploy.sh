@@ -105,8 +105,16 @@ server {
   listen 80;
   listen [::]:80;
 
+  listen 443 ssl;
+  listen [::]:443 ssl;
+
   server_name $DOMAIN;
   http2 off;
+
+  # Self-signed cert (same pattern as task/claw on this server); replace with a
+  # CA-issued one via NPM if a trusted cert becomes available (milo pattern).
+  ssl_certificate /data/custom_ssl/npm-schedule/fullchain.pem;
+  ssl_certificate_key /data/custom_ssl/npm-schedule/privkey.pem;
 
   access_log /data/logs/proxy-host-${conf_id}_access.log proxy;
   error_log /data/logs/proxy-host-${conf_id}_error.log warn;
@@ -119,6 +127,8 @@ server {
 }
 EOF
   scp -q "/tmp/ps-$conf_id.conf" "$HOST:/tmp/ps-$conf_id.conf"
+  # one-time: generate the self-signed cert if it is not there yet
+  ssh_run "mkdir -p $NPM_DIR/data/custom_ssl/npm-schedule; [ -f $NPM_DIR/data/custom_ssl/npm-schedule/fullchain.pem ] || openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 825 -keyout $NPM_DIR/data/custom_ssl/npm-schedule/privkey.pem -out $NPM_DIR/data/custom_ssl/npm-schedule/fullchain.pem -subj /CN=$DOMAIN -addext subjectAltName=DNS:$DOMAIN"
   ssh_run "cp $NPM_DIR/data/nginx/proxy_host/$conf_id.conf $NPM_DIR/data/nginx/proxy_host/$conf_id.conf.bak-$STAMP 2>/dev/null || true; cp /tmp/ps-$conf_id.conf $NPM_DIR/data/nginx/proxy_host/$conf_id.conf"
   if ! ssh_run "docker exec $NPM_CONTAINER nginx -t"; then
     echo "FATAL: nginx -t failed — rolling back conf"
