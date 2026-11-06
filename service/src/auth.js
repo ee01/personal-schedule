@@ -181,6 +181,15 @@ export function createAuth(db) {
       db.prepare('UPDATE tasks SET user_id = ?, updated_at = ? WHERE user_id = ?').run(realId, nowSec(), guestId);
       db.prepare('UPDATE occurrences SET user_id = ? WHERE user_id = ?').run(realId, guestId);
       db.prepare("DELETE FROM task_tags WHERE task_id NOT IN (SELECT id FROM tasks WHERE user_id = ?)").run(realId);
+      // single-device connections transfer with the account (defect 5: binding
+      // must not lose the RC/Memory connections configured before binding)
+      db.prepare(
+        `INSERT INTO connections (user_id, key, value, updated_at)
+         SELECT ?, key, value, ? FROM connections WHERE user_id = ?
+         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(realId, nowSec(), guestId);
+      db.prepare('DELETE FROM tokens WHERE user_id = ?').run(guestId);
+      db.prepare('DELETE FROM connections WHERE user_id = ?').run(guestId);
       db.prepare('DELETE FROM users WHERE id = ?').run(guestId);
       db.exec('COMMIT');
     } catch (error) {

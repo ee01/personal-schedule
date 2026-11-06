@@ -533,7 +533,16 @@ async function loadChain(id, occurrenceKey) {
   if (!r.body.available) { box.innerHTML = '<div class="empty" style="padding:18px">' + esc(r.body.reason || '暂无追问链数据') + '</div>'; return; }
   const list = r.body.sessions && r.body.sessions.items ? r.body.sessions.items : (r.body.sessions || []);
   box.innerHTML = list.map((sess) => {
-    const hist = (sess.events || []).map((e) => '<div class="muted" style="font-size:12px">· ' + esc(e.type) + (e.detail ? ' · ' + esc(JSON.stringify(e.detail).slice(0, 60)) : '') + '</div>').join('');
+    const hist = (sess.events || []).map((e) => {
+      const type = e.eventType || e.type || '';
+      const detailRaw = e.payload !== undefined ? e.payload : e.detail;
+      let detail = '';
+      if (detailRaw !== undefined && detailRaw !== null) {
+        try { detail = typeof detailRaw === 'string' ? detailRaw : JSON.stringify(detailRaw); } catch { detail = String(detailRaw); }
+        if (detail.length > 80) detail = detail.slice(0, 80) + '…';
+      }
+      return '<div class="muted" style="font-size:12px">· ' + esc(type) + (detail ? ' · ' + esc(detail) : '') + '</div>';
+    }).join('');
     let h = '<div class="content-box"><div class="row"><b>' + esc(sess.renderedQuestion || sess.id) + '</b><span class="pill ' + (sess.status || '') + '">' + esc(sess.status || '') + '</span>'
       + (sess.followupCount !== undefined ? '<span class="muted">第 ' + (sess.followupCount + 1) + '/' + ((sess.maxFollowup || 0) + 1) + ' 轮</span>' : '') + '<span class="spacer"></span></div>' + hist;
     // “追问上限 +2”仅等待状态展示；成功后刷新为当前会话与原历史源，不标记“已发送”

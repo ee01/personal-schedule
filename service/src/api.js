@@ -171,6 +171,15 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
   app.post('/api/v1/auth/email/verify', async (req, res) => {
     const { email, code } = req.body || {};
     const user = auth.verifyEmailCode(String(email || ''), String(code || ''));
+    // identity conflict guard (defect 4): a REAL account session binding an
+    // email that belongs to a DIFFERENT account is a conflict — the userId is
+    // never silently switched; only guest (single-device) sessions upgrade.
+    const cookies = req.headers.cookie || '';
+    const m = cookies.match(/ps_session=([^;]+)/);
+    const current = m ? auth.userBySession(m[1]) : null;
+    if (current && current.is_guest !== 1 && current.id !== user.id) {
+      throw badRequest('该邮箱属于另一个账号，不能在此会话上自动切换——请先退出当前账号或使用冲突处理流程', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
+    }
     const merged = mergeGuestOnLogin(req, user.id);
     rotateSession(req, res, user.id, null);
     return { user: publicUser(user), ...merged };
@@ -506,9 +515,15 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
       // E-184 follow-up chain contract: includeHistory=1 for per-occurrence
       // state/rounds/history; exact occurrenceKey passthrough when a run is
       // selected (E-184 222dfe13)
-      const q = new URLSearchParams({ templateId, limit: '20' });
-      if (req.query.includeHistory === '1') q.set('includeHistory', '1');
-      if (req.query.occurrenceKey) q.set('occurrenceKey', String(req.query.occurrenceKey));
+      // passthrough: includeHistory, occurrenceKey, limit, offset (Sol's
+      // controlled-verification defect 1: pagination was dropped)
+      const q = new URLSearchParams({ templateId });
+      for (const k of ['includeHistory', 'occurrenceKey', 'limit', 'offset', 'eventLimit']) {
+        const v = req.query[k];
+        if (v !== undefined && v !== '') q.set(k, String(v));
+        if (k === 'includeHistory' && v !== '1') q.delete('includeHistory');
+      }
+      if (!q.get('limit')) q.set('limit', '20');
       const response = await fetch(`${base}/api/v1/outreach/sessions?${q}`, {
         headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(config.httpTimeoutMs),
@@ -551,7 +566,8 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
         });
         if (check.ok) {
           const data = await check.json().catch(() => ({}));
-          owned = (data.records || data.sessions || []).some((x) => x.id === sessionId);
+          const list = data.items || data.records || data.sessions || [];
+          owned = list.some((x) => x.id === sessionId);
         }
       } catch { owned = false; }
       if (!owned) throw badRequest('会话不属于该任务，已拒绝转发');
