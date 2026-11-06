@@ -83,6 +83,60 @@ function sha256HexSync(value) {
   return import('node:crypto').then((crypto) => crypto.createHash('sha256').update(value).digest('hex'));
 }
 
+// ------------------------------------------------------------ directory / bots
+// X1: recipient chips resolve against the real RC directory — a chip only
+// exists for a real match; unmatched input never fabricates a contact.
+
+export async function rcDirectorySearch(connection, query) {
+  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const token = await rcAccessToken(connection);
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const me = await httpJson('GET', `${server}/restapi/v1.0/account/~/extension/~`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  if (!me.ok) throw new HttpError(502, `rc whoami failed (${me.status})`);
+  const tenant = String(me.json?.account?.id || 'default');
+  const results = [];
+  // persons: /directory/entries/search matches displayName/email
+  const persons = await httpJson(
+    'GET',
+    `${server}/restapi/v1.0/directory/entries/search?q=${encodeURIComponent(q)}&perPage=20`,
+    { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+  );
+  for (const entry of persons.json?.records || []) {
+    results.push({
+      kind: 'user',
+      id: entry.id,
+      name: entry.displayName || entry.name || `${entry.firstName || ''} ${entry.lastName || ''}`.trim(),
+      email: Array.isArray(entry.emails) ? entry.emails[0] : undefined,
+      detail: entry.type === 'Department' ? '部门联系人' : undefined,
+    });
+  }
+  // group chats: list then filter by name server-side
+  const chats = await httpJson('GET', `${server}/restapi/v1.0/glip/chats?recordCount=100`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  for (const chat of chats.json?.records || []) {
+    const name = chat.name || chat.firstName || '(未命名群组)';
+    if (String(name).toLowerCase().includes(q) || String(chat.id).includes(q)) {
+      results.push({ kind: 'chat', id: chat.id, name, detail: chat.type === 'Team' ? `团队群 · ${chat.memberCount || '?'} 人` : '群组' });
+    }
+  }
+  return { tenant, results };
+}
+
+export async function rcBotsList(connection) {
+  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const token = await rcAccessToken({ ...connection, kind: 'bot' });
+  const me = await httpJson('GET', `${server}/restapi/v1.0/account/~/extension/~`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  if (!me.ok) throw new HttpError(502, `rc bot check failed (${me.status})`);
+  const bots = [{ id: me.json.id, name: me.json.name || 'Bot', verified: true }];
+  return { tenant: String(me.json?.account?.id || 'default'), bots };
+}
+
 // ---------------------------------------------------------------- providers
 
 export const providers = {

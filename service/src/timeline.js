@@ -255,5 +255,33 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
     return timer;
   }
 
-  return { refreshProject, recomputeProject, refreshAndRecompute, cacheFor, startMaintenanceLoop, computeTargetInstant, normalizeReleases };
+  // X2: canonical project registry (mirrors Personal AI's release-train
+  // list) — each entry carries freshness + milestone dates from the cache
+  // when available, so the create-flow dropdowns only show real projects.
+  const PROJECTS = [
+    { id: 'mThor', name: 'mThor' },
+    { id: 'Jupiter desktop', name: 'Jupiter Desktop' },
+    { id: 'Jupiter web', name: 'Jupiter Web' },
+    { id: 'Nova', name: 'Nova' },
+    { id: 'RIO', name: 'RIO' },
+    { id: 'NC', name: 'NC' },
+    { id: 'Rooms', name: 'Rooms' },
+  ];
+
+  function listProjects() {
+    return PROJECTS.map((project) => {
+      const cache = cacheFor(project.id);
+      const current = (cache?.releases || []).find((r) => r.release) || null;
+      return {
+        ...project,
+        configured: Boolean(cache),
+        stale: cache ? cache.stale === 1 : null,
+        fetchedAt: cache ? cache.fetched_at : null,
+        currentRelease: current ? current.release : null,
+        milestones: (current?.milestones || []).map((m) => ({ name: m.name, date: m.date || null })),
+      };
+    });
+  }
+
+  return { refreshProject, recomputeProject, refreshAndRecompute, cacheFor, startMaintenanceLoop, computeTargetInstant, normalizeReleases, listProjects };
 }

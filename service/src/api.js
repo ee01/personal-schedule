@@ -12,7 +12,7 @@ import {
 } from './util.js';
 import { createTaskStore, CREATABLE_TYPES } from './store.js';
 import { nextRunAt } from './time.js';
-import { providers, rcWhoAmI } from './providers.js';
+import { providers, rcWhoAmI, rcDirectorySearch, rcBotsList } from './providers.js';
 import { publishReasonText } from './notify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -121,7 +121,7 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const user = requireUser(db, auth, req);
     const nonce = String(req.body?.nonce || '').trim();
     if (!nonce || nonce.length < 16 || nonce.length > 128) throw badRequest('nonce required (16-128 chars)');
-    if (user.is_guest !== 1) throw badRequest('仅访客会话需要扩展登录（已登录用户无需此流程）');
+    if (user.is_guest !== 1) throw badRequest('仅单设备模式会话需要扩展登录（已绑定账号无需此流程）');
     const sessionId = currentSessionId(req);
     if (!sessionId) throw badRequest('会话缺失');
     db.prepare('DELETE FROM login_bridges WHERE expires_at < ?').run(nowSec());
@@ -157,7 +157,7 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     if (!binding) throw badRequest('nonce 无效或已使用');
     const sessionUser = auth.userBySession((req.headers.cookie.match(/ps_session=([^;]+)/) || [])[1]);
     if (!sessionUser || sessionUser.is_guest !== 1) {
-      throw badRequest('发起会话不是访客会话（已登录用户无需扩展登录）');
+      throw badRequest('发起会话不是单设备会话（已绑定账号无需扩展登录）');
     }
     const consumed = db
       .prepare('DELETE FROM login_bridges WHERE nonce = ? AND session_id = ? AND expires_at > ?')
@@ -306,7 +306,7 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const user = requireUser(db, auth, req);
     // guest boundary: visitor tasks are drafts only — the runner never
     // schedules, executes, publishes or binds credentials for a guest
-    if (user.is_guest === 1) req.body = { ...req.body, status: 'draft' };
+    // (X6/A2) single-device mode: no gate
     // idempotencyKey (per-owner) makes unknown create outcomes safely
     // retryable: a replay returns the first task instead of a duplicate
     const { task, missing, replayed } = store.createTask(user.id, req.body);
@@ -339,9 +339,6 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const user = requireUser(db, auth, req);
     const { status } = req.body;
     // guest boundary: visitor tasks stay drafts — no scheduling/execution
-    if (user.is_guest === 1 && status === 'active') {
-      throw badRequest('访客任务为草稿：请先登录（保存并登录）后再启用调度/执行');
-    }
     const task = store.setStatus(user.id, req.params.id, status);
     schedulePreview(task.id);
     return { task };
@@ -571,7 +568,6 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
   app.put('/api/v1/connections/{key}', (req) => {
     const user = requireUser(db, auth, req);
     // guest boundary: no credential binding for visitor accounts
-    if (user.is_guest === 1) throw badRequest('访客模式不能保存凭据：请先登录（保存并登录）');
     const key = req.params.key;
     if (!['rc_user', 'rc_bot', 'memory', 'multica', 'jira'].includes(key)) throw badRequest('unknown connection key');
     const value = req.body?.value ?? req.body;
@@ -633,6 +629,60 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
       .run(req.params.key, String(req.body?.value ?? req.body?.['']));
     timeline.refreshAndRecompute({ force: true }).catch(() => {});
     return { ok: true };
+  });
+
+  // ------------------------------------------------- directory & bots (X1/X3/X4)
+  // cached per (userId, tenant): a picker hit must come back fast without
+  // cross-user/cross-tenant leakage.
+  const DIR_CACHE_TTL_SEC = 300;
+  function directoryCacheGet(userId, tenant, kind, q) {
+    db.prepare('DELETE FROM directory_cache WHERE updated_at < ?').run(nowSec() - DIR_CACHE_TTL_SEC);
+    const row = db
+      .prepare('SELECT results FROM directory_cache WHERE user_id = ? AND tenant = ? AND kind = ? AND q = ?')
+      .get(userId, tenant, kind, q);
+    return row ? parseJson(row.results, []) : null;
+  }
+  function directoryCachePut(userId, tenant, kind, q, results) {
+    db.prepare(
+      'INSERT OR REPLACE INTO directory_cache (user_id, tenant, kind, q, results, updated_at) VALUES (?,?,?,?,?,?)',
+    ).run(userId, tenant, kind, q, JSON.stringify(results), nowSec());
+  }
+
+  // X1: recipient chips — server-side directory search; no match -> empty,
+  // the client may not fabricate a contact from raw input.
+  app.get('/api/v1/directory/search', async (req) => {
+    const user = requireUser(db, auth, req);
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (!q) return { results: [], tenant: null, cached: false };
+    const conn = getConnections(user.id, 'rc_user');
+    if (!conn) throw badRequest('尚未配置 RingCentral 个人授权（连接与执行器 → RingCentral 个人授权）');
+    const me = await rcWhoAmI(conn).catch(() => null);
+    const tenant = String(me?.account?.id || 'default');
+    const cached = directoryCacheGet(user.id, tenant, 'directory', q);
+    if (cached) return { results: cached, tenant, cached: true };
+    const { results } = await rcDirectorySearch(conn, q);
+    directoryCachePut(user.id, tenant, 'directory', q, results);
+    return { results, tenant, cached: false };
+  });
+
+  // X3: bot picker — only names and verification state, never credentials.
+  app.get('/api/v1/bots', async (req) => {
+    const user = requireUser(db, auth, req);
+    const conn = getConnections(user.id, 'rc_bot');
+    if (!conn || !conn.clientId || !conn.clientSecret) {
+      return { bots: [], configured: false };
+    }
+    const { tenant, bots } = await rcBotsList(conn);
+    const cached = directoryCacheGet(user.id, tenant, 'bots', '*');
+    if (cached) return { bots: cached, configured: true, cached: true };
+    directoryCachePut(user.id, tenant, 'bots', '*', bots);
+    return { bots, configured: true, cached: false };
+  });
+
+  // X2: project list for the create-flow dropdowns (real release trains).
+  app.get('/api/v1/timeline/projects', (req) => {
+    requireUser(db, auth, req);
+    return { projects: timeline.listProjects() };
   });
 
   // ------------------------------------------------------------ timeline

@@ -217,6 +217,22 @@ CREATE TABLE login_bridges (
 ALTER TABLE login_bridges ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
 `,
   },
+  {
+    // v7 (X4): tenant-scoped directory/bot cache — keyed by user AND tenant
+    //   so accounts on different tenants/users never share cache entries.
+    version: 7,
+    up: `
+CREATE TABLE directory_cache (
+  user_id TEXT NOT NULL,
+  tenant TEXT NOT NULL DEFAULT 'default',
+  kind TEXT NOT NULL,
+  q TEXT NOT NULL,
+  results TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, tenant, kind, q)
+);
+`,
+  },
 ];
 
 function migrate(db) {

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../src/db.js';
 import { buildApp } from '../src/server.js';
 import { listen } from '../src/http.js';
+import { nowSec } from '../src/util.js';
 import { config as __config } from '../src/config.js';
 
 // this suite opts into the explicit dev fallback (test env only; production
@@ -265,47 +266,43 @@ test('existing account email login returns the same user; repeat login does not 
   }
 });
 
-test('guest boundary: drafts only — no scheduling, no connections, merge moves drafts', async () => {
+test('single-device mode is a FULL account: active tasks, connections, scheduling (X6/A2)', async () => {
   const ctx = await fresh();
   try {
     const g = await ctx.req('POST', '/api/v1/auth/guest');
     const guestCookie = g.headers['set-cookie'][0].split(';')[0];
-    // guest task is forced to draft
+    // single-device user binds a connection inline — no login wall
+    const conn = await ctx.req('PUT', '/api/v1/connections/rc_user', {
+      cookie: guestCookie, body: { value: { token: 'tok-x', ownChatId: 'me' } },
+    });
+    assert.equal(conn.statusCode, 200, 'single-device user can bind credentials');
+    // and creates a fully ACTIVE task — scheduling persists server-side
     const created = await ctx.req('POST', '/api/v1/tasks', { cookie: guestCookie, body: {
-      type: 'asme', title: '访客草稿', content: 'x',
-      scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) - 60, timezone: 'UTC' },
+      type: 'asme', title: '单设备可真实启用', content: 'x',
+      scheduleSpec: { kind: 'rate', intervalMinutes: 60, timezone: 'UTC' },
       config: { chatId: 'c' },
-      status: 'active', // guest tries to go live — must be forced to draft
+      status: 'active',
     } });
     assert.equal(created.statusCode, 200);
-    // guests can never complete config (credential binding is blocked), so the
-    // task lands as draft or inactive — either way it is unschedulable
-    assert.ok(['draft', 'inactive'].includes((await created.json()).task.status), 'guest task is not schedulable');
-    // guest cannot activate
-    const activate = await ctx.req('POST', `/api/v1/tasks/${(await created.json()).task.id}/status`, {
-      cookie: guestCookie, body: { status: 'active' },
-    });
-    assert.equal(activate.statusCode, 400, 'guest activation blocked');
-    // runner never schedules a draft even if due
+    const createdBody = await created.json();
+    assert.equal(createdBody.task.status, 'active', 'single-device task activates');
+    // make it due now, then the runner schedules it server-side (X6)
+    ctx.db.prepare('UPDATE tasks SET next_run_at = ? WHERE id = ?').run(nowSec() - 5, createdBody.task.id);
     await ctx.services.runner.tick();
     const occ = ctx.db.prepare('SELECT COUNT(*) n FROM occurrences').get();
-    assert.equal(occ.n, 0, 'no occurrences scheduled for guest drafts');
-    // guest cannot bind credentials
-    const conn = await ctx.req('PUT', '/api/v1/connections/rc_user', {
-      cookie: guestCookie, body: { value: { token: 'x' } },
-    });
-    assert.equal(conn.statusCode, 400, 'guest credential binding blocked');
-    // login → merge moves the draft to the real account
+    assert.ok(occ.n >= 1, 'occurrence scheduled server-side for a single-device task');
+    // login (binding email/PAT) still merges the tasks & runs, keeping identity
     const tok = ctx.services.auth.issueToken(ctx.user.id, 'g');
     const login = await ctx.req('POST', '/api/v1/auth/login', { cookie: guestCookie, body: { token: tok } });
     const realCookie = login.headers['set-cookie'][0].split(';')[0];
     const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: realCookie });
-    const flat = Array.isArray(await tasks.json()) ? await tasks.json() : (await tasks.json()).tasks;
-    const merged = flat.find((t) => t.title === '访客草稿');
-    assert.ok(merged, 'draft merged into the real account');
-    assert.ok(['draft', 'inactive'].includes(merged.status), 'merged guest task stays unschedulable until the owner reviews and enables');
+    const list = await tasks.json();
+    const flat = Array.isArray(list) ? list : list.tasks || [];
+    assert.ok(flat.some((t) => t.title === '单设备可真实启用'), 'tasks merged, kept under the same account');
+    const kept = ctx.db.prepare('SELECT COUNT(*) n FROM occurrences').get();
+    assert.ok(kept.n >= 1, 'run records preserved by the merge (not re-fired)');
     const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
-    assert.equal(guests.n, 0, 'guest account cleaned up');
+    assert.equal(guests.n, 0, 'single-device account cleaned up after binding');
   } finally {
     await new Promise((r2) => ctx.server.close(r2));
   }
@@ -410,6 +407,107 @@ test('existing account with a non-allowlist domain (E case) keeps its email logi
     const body = await v.json();
     assert.equal(v.statusCode, 200);
     assert.equal(body.user.id, existing.id, 'existing account email login returns the same user');
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('directory/bots/timeline-projects endpoints (X1/X3/X4) with a mock RC', async () => {
+  const ctx = await fresh();
+  try {
+    // no connection configured → honest errors / empty lists (authenticated session)
+    const tok = ctx.services.auth.issueToken(ctx.user.id, 't');
+    const login = await ctx.req('POST', '/api/v1/auth/login', { body: { token: tok } });
+    const cookie = login.headers['set-cookie'][0].split(';')[0];
+    const noDir = await ctx.req('GET', '/api/v1/directory/search?q=eason', { cookie });
+    assert.equal(noDir.statusCode, 400, 'directory search requires an rc_user connection');
+    const noBots = await ctx.req('GET', '/api/v1/bots', { cookie });
+    assert.equal(noBots.statusCode, 200);
+    assert.deepEqual((await noBots.json()).bots, [], 'no bots listed when unconfigured');
+
+    // mock RC directory server
+    const http = await import('node:http');
+    const dirServer = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
+      if (url.pathname.endsWith('/directory/entries/search')) {
+        const q = (url.searchParams.get('q') || '').toLowerCase();
+        const all = [
+          { id: 'p-1', displayName: 'Eason Qiu', emails: ['eason.qiu@ringcentral.com'], type: 'User' },
+          { id: 'p-2', displayName: 'Eason Qiu Junior', type: 'User' },
+        ];
+        const records = all.filter((entry) =>
+          String(entry.displayName).toLowerCase().includes(q)
+          || (entry.emails || []).some((e) => String(e).toLowerCase().includes(q)));
+        send(200, { records });
+        return;
+      }
+      if (url.pathname.endsWith('/glip/chats')) {
+        const q = (url.searchParams.get('q') || '').toLowerCase();
+        const all = [
+          { id: 'chat-9', name: '平台周会', type: 'Team', memberCount: 12 },
+          { id: 'chat-8', name: '别的小组', type: 'Group' },
+        ];
+        const records = all.filter((chat) => String(chat.name).toLowerCase().includes(q) || String(chat.id).includes(q));
+        send(200, { records });
+        return;
+      }
+      if (url.pathname.endsWith('/account/~/extension/~')) {
+        // whoAmI for user and bot share this shape; distinguish by token
+        if ((req.headers.authorization || '').includes('bot-token')) {
+          send(200, { id: 'bot-77', name: '值班 Bot', account: { id: 'tenant-2' } });
+        } else {
+          send(200, { id: 'u-1', account: { id: 'tenant-1' } });
+        }
+        return;
+      }
+      send(404, {});
+    });
+    await new Promise((r) => dirServer.listen(0, '127.0.0.1', r));
+    const rcPort = dirServer.address().port;
+    await ctx.req('PUT', '/api/v1/connections/rc_user', {
+      cookie, body: { value: { serverUrl: `http://127.0.0.1:${rcPort}`, token: 'user-token' } },
+    });
+    await ctx.req('PUT', '/api/v1/connections/rc_bot', {
+      cookie, body: { value: { serverUrl: `http://127.0.0.1:${rcPort}`, clientId: 'c', clientSecret: 's', token: 'bot-token' } },
+    });
+
+    // X1: search resolves real people + chats; no fabricated contacts
+    const dir = await ctx.req('GET', '/api/v1/directory/search?q=eason', { cookie });
+    assert.equal(dir.statusCode, 200);
+    const dirBody = await dir.json();
+    assert.equal(dirBody.cached, false, 'first call fills the cache');
+    assert.equal(dirBody.tenant, 'tenant-1', 'tenant resolved from whoAmI');
+    assert.ok(dirBody.results.some((r) => r.name === 'Eason Qiu' && r.kind === 'user'));
+    const byChat = await ctx.req('GET', '/api/v1/directory/search?q=平台', { cookie });
+    const chatBody = await byChat.json();
+    assert.ok(chatBody.results.some((r) => r.name === '平台周会' && r.kind === 'chat'), 'chat matched by name');
+    const none = await ctx.req('GET', '/api/v1/directory/search?q=nosuchperson', { cookie });
+    assert.deepEqual((await none.json()).results, [], 'no match → empty list, no fabricated contact');
+
+    // X4: cache hit is fast and tenant-scoped
+    const cached = await ctx.req('GET', '/api/v1/directory/search?q=eason', { cookie });
+    assert.equal((await cached.json()).cached, true, 'second call served from cache');
+    const rows = ctx.db.prepare('SELECT user_id, tenant FROM directory_cache').all();
+    assert.ok(rows.length >= 1);
+    assert.ok(rows.every((r) => r.tenant === 'tenant-1'), 'cache keyed with tenant');
+    assert.ok(rows.every((r) => r.user_id === ctx.user.id), 'cache keyed with userId');
+
+    // X3: bots list returns name + verified only
+    const bots = await ctx.req('GET', '/api/v1/bots', { cookie });
+    const botsBody = await bots.json();
+    assert.equal(botsBody.configured, true);
+    assert.deepEqual(botsBody.bots, [{ id: 'bot-77', name: '值班 Bot', verified: true }]);
+    assert.ok(!JSON.stringify(botsBody).includes('clientSecret'), 'no credentials leaked');
+
+    // X2: timeline projects list
+    const projects = await ctx.req('GET', '/api/v1/timeline/projects', { cookie });
+    assert.equal(projects.statusCode, 200);
+    const list = (await projects.json()).projects;
+    assert.ok(list.some((p) => p.id === 'mThor' && p.name === 'mThor'));
+    assert.ok(list.every((p) => Array.isArray(p.milestones)), 'milestones array present (dates when cached)');
+
+    await new Promise((r) => dirServer.close(r));
   } finally {
     await new Promise((r2) => ctx.server.close(r2));
   }
