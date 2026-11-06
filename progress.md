@@ -156,3 +156,9 @@
 - **G6/G8**：行结构改用基准 .trow/.stats/.agenda 类名，直接继承原型响应式（1100px 收 Tag 列 / 860px 单栏 / drawer 全宽）与动效（transition 120-400ms、prefers-reduced-motion 降级）。
 - **X5 部分**：收件人 chips 显示名称+稳定 ID（config.recipients 保留 {id,name}）；@正文转 RC mention 保持待用户澄清单列。
 - 65/65 测试；部署 e4214c4（线上 app/favicon/guest/目录/Timeline 全部验证）。
+
+## 2026-11-06 · G5 分享弹窗修复 + 追问链接入（完成，双侧部署）
+
+- **G5**：分享页三处原生弹窗全部替换为站内组件——无效 token → 站内"分享不可用"状态卡；未选任务 → 站内 toast"请至少勾选一个任务"；重复导入 → 站内确认框（列出已导入任务、确认后创建副本，语义与原 confirm 一致）。浏览器实测四场景全过、零原生弹窗。
+- **追问链接入（Sol 222dfe13）**：`/tasks/:id/chain` 转发新增 `includeHistory=1`（发现并修复空值 includeHistory 导致 memory 400 的代理 bug）；选中运行时透传精确 `occurrenceKey`；动作转发前核验会话属于该任务。详情抽屉追问链 tab 拉真实会话/事件历史。
+- **双侧部署**：memory-service 部署 222dfe13（跨服务测试 14/15 过，1 skip 为条件跳过）；schedule 部署 441dea7（65/65）。资源指纹：index.html 5fb6e616…、app.js a7200e07…、share/index.html 47093c59…。

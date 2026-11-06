@@ -1,0 +1,286 @@
+{
+  "sourceRevision": "3e0e89a4ad396c1a31db19e183e7009c2a4b73da",
+  "schemaVersion": 6,
+  "transport": "local HTTP API, not browser TLS evidence",
+  "mail": "controlled Resend only; no login/nonce route shim",
+  "results": [
+    {
+      "name": "nonce concurrent consumption",
+      "expected": [
+        200,
+        400
+      ],
+      "actual": [
+        200,
+        400
+      ],
+      "passed": true
+    },
+    {
+      "name": "rotation invalidates initiating guest cookie",
+      "expected": 401,
+      "actual": 401,
+      "passed": true
+    },
+    {
+      "name": "rotation sets distinct cookie",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "restored E identity",
+      "expected": "usr_4892f6d410ed43ccac8c6cebcfbb9b86",
+      "actual": "usr_4892f6d410ed43ccac8c6cebcfbb9b86",
+      "passed": true
+    },
+    {
+      "name": "expired nonce rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "no PAT cannot exchange",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "nonce tied to initiating session",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "nonce requires initiating cookie",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "wrong Origin rejected by server",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "server refuses replacing existing real session",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "cannot overwrite another session nonce",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "guest create never active",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "guest enable rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "guest PATCH cannot activate",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "guest cannot bind credentials",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "guest has no execution occurrences",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "name": "guest drafts merge only once",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "name": "draft remains non-active after login",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "existing E PAT login preserved",
+      "expected": "usr_4892f6d410ed43ccac8c6cebcfbb9b86",
+      "actual": "usr_4892f6d410ed43ccac8c6cebcfbb9b86",
+      "passed": true
+    },
+    {
+      "name": "existing E email login available",
+      "expected": 200,
+      "actual": 200,
+      "passed": true
+    },
+    {
+      "name": "actual email-code single consumption",
+      "expected": [
+        200,
+        400
+      ],
+      "actual": [
+        200,
+        400
+      ],
+      "passed": true
+    },
+    {
+      "name": "device-issued cookie revoked",
+      "expected": 401,
+      "actual": 401,
+      "passed": true
+    },
+    {
+      "name": "revoked device PAT rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "historical unlinked cookie remains explicit exception",
+      "expected": 200,
+      "actual": 200,
+      "passed": true
+    },
+    {
+      "name": "bridge disable flag denies register",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    }
+  ],
+  "supplementary": [
+    {
+      "name": "rejection preserves legitimate nonce: different guest",
+      "expected": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "actual": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "passed": true
+    },
+    {
+      "name": "rejection preserves legitimate nonce: missing cookie",
+      "expected": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "actual": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "passed": true
+    },
+    {
+      "name": "rejection preserves legitimate nonce: wrong origin",
+      "expected": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "actual": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "passed": true
+    },
+    {
+      "name": "rejection preserves legitimate nonce: real logged-in cookie",
+      "expected": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "actual": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "passed": true
+    },
+    {
+      "name": "rejection preserves legitimate nonce: overwrite registration",
+      "expected": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "actual": {
+        "rejected": 400,
+        "retained": true,
+        "legitimate": 200,
+        "sameUser": true
+      },
+      "passed": true
+    },
+    {
+      "name": "existing E email verifies twice without duplicate account",
+      "expected": {
+        "first": 200,
+        "second": 200,
+        "sameUser": true,
+        "count": 1
+      },
+      "actual": {
+        "first": 200,
+        "second": 200,
+        "sameUser": true,
+        "count": 1
+      },
+      "passed": true
+    },
+    {
+      "name": "unregistered external-domain email still rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "actual migration has nonce session binding",
+      "expected": {
+        "version": 6,
+        "sessionColumn": true
+      },
+      "actual": {
+        "version": 6,
+        "sessionColumn": true
+      },
+      "passed": true
+    }
+  ]
+}

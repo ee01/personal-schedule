@@ -1,0 +1,10 @@
+{
+  "transport": "actual local Schedule + Memory HTTP, no proxy mock",
+  "available": true,
+  "source": "memory:outreach",
+  "sessionCount": 2,
+  "customTemplateMapping": true,
+  "historyOptInAvailable": true,
+  "taskEnabled": false,
+  "businessMessagesSent": 0
+}

@@ -1,10 +1,10 @@
 # Personal Schedule 工程说明
 
-当前阶段：**E-183 Stage 3 实现进行中**。`service/` 为生产实现（零 npm 依赖 Node ≥23.4，node:sqlite + node:http），已实现并测试：多用户任务 CRUD、Tag 多对多分组与类型视图、持久化 Runner（cron/rate/one-shot/timeline，occurrence 幂等键、租约、重启恢复、非幂等投递不自动重发）、多执行器适配（RC 直发、memory 委托、Multica webhook 直打、JIRA 托管 webhook）、运行通知与产出发布分离（字段级模板校验、发布暂停、独立重试）、Tag 实时视图分享与导入（判重/幂等/撤销/默认执行器复用）、Web 管理界面与公开分享页。37 项单测通过。
+当前阶段：**E-183 Stage 3 实现进行中**。`service/` 为生产实现（零 npm 依赖 Node ≥23.4，node:sqlite + node:http），已实现并测试：多用户任务 CRUD、Tag 多对多分组与类型视图、持久化 Runner（cron/rate/one-shot/timeline，occurrence 幂等键、租约、重启恢复、非幂等投递不自动重发）、多执行器适配（RC 直发、memory 委托、Multica webhook 直打、JIRA 托管 webhook）、运行通知与产出发布分离（字段级模板校验、发布暂停、独立重试）、Tag 实时视图分享与导入（判重/幂等/撤销/默认执行器复用）、Web 管理界面与公开分享页。**单测**：在 `service/` 目录执行 `npm test`，当前为 **53** 项通过（以仓库 `service/test` 为准）。
 
 对外契约见 `docs/schedule-service-api-contract.md`（v0.1，E-184 对齐依据，含待联调清单 V1–V7）。部署入口 http://schedule.xmnup.com/（rcadmin@10.32.56.212:3230，NPM 代理），运维与回退见 `docs/operations/deployment.md`，部署脚本 `deploy/deploy.sh`；连接/授权入口与受控测试对象见 `docs/operations/connections.md`（RC AsMe 重授权 vs Bot 自动续期、Multica webhook 材料、memory pak 签发路径）。
 
-未完成/待联调（如实边界）：memory 侧 `trigger-occurrence` 为新增接口待 E-184 实现（Schedule 已按契约调用）；Multica webhook 真实触发、RC JWT 刷新、Timeline Release Info 实源、模板模式 `publish_fields` 结果契约待联调；Web UI 为功能完整版，与 E-182 原型的视觉/交互全面对齐属后续增量。
+未完成/待联调（如实边界）：Memory `POST …/trigger-occurrence` 与结果 envelope 已由 E-184 合入并由部署侧上线，Schedule 已按契约调用；仍需在**用户提供凭据与受控测试对象**的前提下完成端到端验证项：Multica webhook 真实触发、RC AsMe 真实发信与 JWT 续期路径、Timeline Release Info 与模板模式 `publish_fields` 在生产链路中的实源对齐等。Web UI 为功能完整版，与 E-182 原型的视觉/交互逐屏对照属 E-185 增量验收。
 
 ## 实施依据
 
@@ -32,6 +32,7 @@
 
 ## 阶段约束
 
+- 原型对照交付（E-182 基准）：`prototype/handoff/`（基准 HTML、prototype-parity-checklist.md、favicon/ 资产，PNG 由 `prototype/test/render-icons.js` 生成）。
 - Stage 2 原型（E-182）：`prototype/personal-schedule-prototype.html`（单文件，由 `prototype/src/0*` 拼接：`cat prototype/src/0* > prototype/personal-schedule-prototype.html`）；点击验证脚本 `prototype/test/flows.js`、`prototype/test/notify.js`（帮我做：运行通知 / 发布产出 / 模板 / 试运行）（需 playwright，`PW=<playwright 路径> node prototype/test/flows.js <html> <截图目录>`）。原型仅为体验确认依据，不是生产代码。
 
 Stage 2 原型为纯静态单 HTML（覆盖 docs/prototype-flows-and-states.md v0.5 清单，含通知发布/ Timeline/分享导入），交付后等待用户决策；未通过不进入生产 UI/服务实现。不写生产代码、不部署、不 SSH 到用户服务器，直至对应阶段卡明确授权。
@@ -43,4 +44,4 @@ Stage 2 原型为纯静态单 HTML（覆盖 docs/prototype-flows-and-states.md v
 
 ## 部署与验证
 
-用户提供测试主机 rcadmin@10.32.56.212，尚未验证或连接。当前无 build/test/deploy 命令。后续实际部署资料归 docs/operations/deployment.md；不得在仓库或交付附件保存真实凭据/个人聊天数据。
+测试/生产主机 **rcadmin@10.32.56.212**（入口 **http://schedule.xmnup.com/** 与 **https://schedule.xmnup.com/**，NPM 反代至应用 `0.0.0.0:3230`）已按 `deploy/deploy.sh` 与 `docs/operations/deployment.md` 部署；**本地验证**：进入 `service/` 执行 `npm test`。**http 入口不经 TLS**，浏览器无证书信任问题；**https** 当前为 NPM 自签证书，若用 `https://` 访问需在浏览器信任该证或改用 `http://`。不得在仓库或交付附件保存真实凭据/个人聊天数据。

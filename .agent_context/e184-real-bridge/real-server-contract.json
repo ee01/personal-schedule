@@ -1,0 +1,169 @@
+{
+  "sourceRevision": "c07879e283eae5f4503e9b8ed0a55ec4217f4ef7",
+  "transport": "local HTTP API, not browser TLS evidence",
+  "mail": "controlled Resend only; no login/nonce route shim",
+  "results": [
+    {
+      "name": "nonce concurrent consumption",
+      "expected": [
+        200,
+        400
+      ],
+      "actual": [
+        200,
+        400
+      ],
+      "passed": true
+    },
+    {
+      "name": "rotation invalidates initiating guest cookie",
+      "expected": 401,
+      "actual": 401,
+      "passed": true
+    },
+    {
+      "name": "rotation sets distinct cookie",
+      "expected": true,
+      "actual": true,
+      "passed": true
+    },
+    {
+      "name": "restored E identity",
+      "expected": "usr_728e4d3ca8aa481aa169e365ca993fdf",
+      "actual": "usr_728e4d3ca8aa481aa169e365ca993fdf",
+      "passed": true
+    },
+    {
+      "name": "expired nonce rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "no PAT cannot exchange",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "nonce tied to initiating session",
+      "expected": 400,
+      "actual": 200,
+      "passed": false
+    },
+    {
+      "name": "nonce requires initiating cookie",
+      "expected": true,
+      "actual": false,
+      "passed": false
+    },
+    {
+      "name": "wrong Origin rejected by server",
+      "expected": true,
+      "actual": false,
+      "passed": false
+    },
+    {
+      "name": "server refuses replacing existing real session",
+      "expected": true,
+      "actual": false,
+      "passed": false
+    },
+    {
+      "name": "cannot overwrite another session nonce",
+      "expected": true,
+      "actual": false,
+      "passed": false
+    },
+    {
+      "name": "guest create never active",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "guest enable rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "guest PATCH cannot activate",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "guest cannot bind credentials",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "guest has no execution occurrences",
+      "expected": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "name": "guest drafts merge only once",
+      "expected": 1,
+      "actual": 1,
+      "passed": true
+    },
+    {
+      "name": "draft remains non-active after login",
+      "expected": false,
+      "actual": false,
+      "passed": true
+    },
+    {
+      "name": "existing E PAT login preserved",
+      "expected": "usr_728e4d3ca8aa481aa169e365ca993fdf",
+      "actual": "usr_728e4d3ca8aa481aa169e365ca993fdf",
+      "passed": true
+    },
+    {
+      "name": "existing E email login available",
+      "expected": 200,
+      "actual": 400,
+      "passed": false
+    },
+    {
+      "name": "actual email-code single consumption",
+      "expected": [
+        200,
+        400
+      ],
+      "actual": [
+        200,
+        400
+      ],
+      "passed": true
+    },
+    {
+      "name": "device-issued cookie revoked",
+      "expected": 401,
+      "actual": 401,
+      "passed": true
+    },
+    {
+      "name": "revoked device PAT rejected",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    },
+    {
+      "name": "historical unlinked cookie remains explicit exception",
+      "expected": 200,
+      "actual": 200,
+      "passed": true
+    },
+    {
+      "name": "bridge disable flag denies register",
+      "expected": 400,
+      "actual": 400,
+      "passed": true
+    }
+  ]
+}

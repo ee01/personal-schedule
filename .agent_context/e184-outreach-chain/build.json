@@ -1,0 +1,6 @@
+{
+  "isolatedCommittedBaselinePlusOwnedChanges": true,
+  "command": "npm run build",
+  "exitCode": 0,
+  "sharedWorktreeBuild": "blocked by pre-existing TS2300 duplicate import in IngestionPipeline.ts"
+}

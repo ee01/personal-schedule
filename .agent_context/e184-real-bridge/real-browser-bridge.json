@@ -1,0 +1,12 @@
+{
+  "routes": "actual Schedule loginBridge/register/exchange",
+  "mail": "controlled Resend; no real delivery",
+  "tls": "normal browser verification; no certificate bypass",
+  "browserFunctional": "BLOCKED: provide browser-trusted SCHEDULE_TEST_TLS_CERT and SCHEDULE_TEST_TLS_KEY paths",
+  "results": [
+    {
+      "name": "untrusted TLS refused by real browser",
+      "passed": true
+    }
+  ]
+}

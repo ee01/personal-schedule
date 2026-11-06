@@ -506,7 +506,8 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
       // E-184 follow-up chain contract: includeHistory=1 for per-occurrence
       // state/rounds/history; exact occurrenceKey passthrough when a run is
       // selected (E-184 222dfe13)
-      const q = new URLSearchParams({ templateId, limit: '20', includeHistory: req.query.includeHistory === '1' ? '1' : '' });
+      const q = new URLSearchParams({ templateId, limit: '20' });
+      if (req.query.includeHistory === '1') q.set('includeHistory', '1');
       if (req.query.occurrenceKey) q.set('occurrenceKey', String(req.query.occurrenceKey));
       const response = await fetch(`${base}/api/v1/outreach/sessions?${q}`, {
         headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },

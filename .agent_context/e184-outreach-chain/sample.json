@@ -1,0 +1,140 @@
+{
+  "transport": "actual local Memory HTTP; fixture business events, no RC send",
+  "request": "/outreach/sessions?templateId=schedule-chain-fixture&occurrenceKey=fixture-task%3A1%3A2026-11-07T09%3A00&includeHistory=1&eventLimit=2",
+  "response": {
+    "items": [
+      {
+        "id": "48384364-c6a0-4951-8a43-79339d9cdc67",
+        "templateId": "schedule-chain-fixture",
+        "originKind": "scheduled_template",
+        "channel": "ringcentral",
+        "targetType": "group",
+        "targetRef": "fixture-chat",
+        "targetResolutionStatus": "resolved",
+        "targetResolvedType": "group",
+        "targetResolvedId": "fixture-chat",
+        "targetResolvedLabel": "Fixture group",
+        "targetResolvedChatId": "fixture-chat",
+        "renderedQuestion": "Controlled fixture question",
+        "status": "scheduled",
+        "requiresApproval": false,
+        "followupCount": 0,
+        "maxFollowup": 3,
+        "followupIntervalSeconds": 86400,
+        "nextCheckAt": 1793985056,
+        "scheduledFor": 1793985056,
+        "occurrenceKey": "fixture-task:1:2026-11-07T09:00",
+        "occurrenceStartAt": 1793985056,
+        "createdAt": 1793981456,
+        "updatedAt": 1793981456,
+        "events": [
+          {
+            "id": "fd0dbe0d-b53d-4ce2-882a-daf15ded3c76",
+            "sessionId": "48384364-c6a0-4951-8a43-79339d9cdc67",
+            "eventType": "created",
+            "payload": {
+              "sourceSystem": "schedule_service",
+              "occurrenceKey": "fixture-task:1:2026-11-07T09:00"
+            },
+            "createdAt": 1793981456
+          },
+          {
+            "id": "b0e83e63-77b4-45fb-ae7a-f58332f374e2",
+            "sessionId": "48384364-c6a0-4951-8a43-79339d9cdc67",
+            "eventType": "approved",
+            "createdAt": 1793981456
+          }
+        ],
+        "history": {
+          "total": 4,
+          "limit": 2,
+          "offset": 0,
+          "hasMore": true
+        },
+        "businessRef": {
+          "kind": "outreach_session",
+          "id": "48384364-c6a0-4951-8a43-79339d9cdc67",
+          "detailPath": "/api/v1/outreach/sessions/48384364-c6a0-4951-8a43-79339d9cdc67"
+        }
+      }
+    ],
+    "total": 1,
+    "limit": 20,
+    "offset": 0,
+    "schemaVersion": 1,
+    "historyIncluded": true,
+    "timeUnit": "unix_seconds",
+    "emptyReason": null,
+    "hasMore": false
+  },
+  "secondPage": {
+    "items": [
+      {
+        "id": "48384364-c6a0-4951-8a43-79339d9cdc67",
+        "templateId": "schedule-chain-fixture",
+        "originKind": "scheduled_template",
+        "channel": "ringcentral",
+        "targetType": "group",
+        "targetRef": "fixture-chat",
+        "targetResolutionStatus": "resolved",
+        "targetResolvedType": "group",
+        "targetResolvedId": "fixture-chat",
+        "targetResolvedLabel": "Fixture group",
+        "targetResolvedChatId": "fixture-chat",
+        "renderedQuestion": "Controlled fixture question",
+        "status": "scheduled",
+        "requiresApproval": false,
+        "followupCount": 0,
+        "maxFollowup": 3,
+        "followupIntervalSeconds": 86400,
+        "nextCheckAt": 1793985056,
+        "scheduledFor": 1793985056,
+        "occurrenceKey": "fixture-task:1:2026-11-07T09:00",
+        "occurrenceStartAt": 1793985056,
+        "createdAt": 1793981456,
+        "updatedAt": 1793981456,
+        "events": [
+          {
+            "id": "3cf31c33-552b-4b39-8b8e-9967870fbfaa",
+            "sessionId": "48384364-c6a0-4951-8a43-79339d9cdc67",
+            "eventType": "reply_received",
+            "payload": {
+              "replyText": "Fixture reply",
+              "classification": "later"
+            },
+            "createdAt": 1793981456
+          },
+          {
+            "id": "242a750d-0eb5-4514-92ea-d97be5f8a9d7",
+            "sessionId": "48384364-c6a0-4951-8a43-79339d9cdc67",
+            "eventType": "followup_sent",
+            "payload": {
+              "followupCount": 1,
+              "postId": "fixture-post"
+            },
+            "createdAt": 1793981456
+          }
+        ],
+        "history": {
+          "total": 4,
+          "limit": 2,
+          "offset": 2,
+          "hasMore": false
+        },
+        "businessRef": {
+          "kind": "outreach_session",
+          "id": "48384364-c6a0-4951-8a43-79339d9cdc67",
+          "detailPath": "/api/v1/outreach/sessions/48384364-c6a0-4951-8a43-79339d9cdc67"
+        }
+      }
+    ],
+    "total": 1,
+    "limit": 20,
+    "offset": 0,
+    "schemaVersion": 1,
+    "historyIncluded": true,
+    "timeUnit": "unix_seconds",
+    "emptyReason": null,
+    "hasMore": false
+  }
+}
