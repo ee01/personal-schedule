@@ -76,3 +76,11 @@
 - **线上验收证据**：① 无源权限接收者导入含材料任务成功（draft 保留材料、pending_target、激活被门禁）；缺材料项导入被拒（未创建）；② 状态机全链路（非法转移拒绝→报告 disabled 副本仍被门禁→completed+webhook 解锁激活成功）；③ 重复 occurrence 幂等（上轮 live：duplicate_occurrence）；④ agent_task 线上真实派发→actionId 持久化→exact-run 轮询到自身终态（runId 一致；测试用户执行器栈未配置导致 failed，属环境事实非契约失败）；⑤⑥ publishFields 对象校验/缺正文暂停不回退摘要、通知/发布单一发送方——单测覆盖 + enqueue 响应实测 notificationOwner:'memory' / publishOwner:'schedule_service'。
 - Memory 健康（复检）：/health 未鉴权探针恒 degraded/connected:false（设计语义），数据完好（19005/36）。
 - 已部署 schedule 服务（md5 校验一致）；E2E 测试账号/密钥沿用（glm-itest / glm-itest2，联调后清理）。
+
+## 2026-11-06 · E-183 原型视觉对齐轮（完成）
+
+- Web 主界面与分享页对齐已确认原型的视觉语言：暗色基底、类型强调色（asme/bot/report/outreach/agent/jira）、卡片化任务列表（类型图标 + 标题 + 摘要 + 标签 + 待补全提示）、类型徽章/状态 pill、暗色抽屉与设置页；修复登录/boot 后不刷新数据的真实缺陷。
+- H12 诚实化：试运行输出明确"不执行任何真实操作、不发送；write 模式无 dry-run（H12）仅展示通知/发布形态"。
+- 浏览器验证：Playwright（chromium）7 张主要流程截图（任务列表/创建（帮我做含两区域）/详情抽屉（运行记录+发布态）/设置/标签/公开分享页/需要补全视图），无 JS 错误。
+- RC/Multica/Memory/JIRA 授权入口、所需材料、续期行为与受控测试对象整理入 docs/operations/connections.md（优先复用已授权连接：Bot 自动续期、AsMe 需重授权或经 E-184 桥、Multica 仅需 webhook URL+binding 标识，无需 PAT）。
+- 已部署 http://schedule.xmnup.com/。

@@ -2,7 +2,7 @@
 
 当前阶段：**E-183 Stage 3 实现进行中**。`service/` 为生产实现（零 npm 依赖 Node ≥23.4，node:sqlite + node:http），已实现并测试：多用户任务 CRUD、Tag 多对多分组与类型视图、持久化 Runner（cron/rate/one-shot/timeline，occurrence 幂等键、租约、重启恢复、非幂等投递不自动重发）、多执行器适配（RC 直发、memory 委托、Multica webhook 直打、JIRA 托管 webhook）、运行通知与产出发布分离（字段级模板校验、发布暂停、独立重试）、Tag 实时视图分享与导入（判重/幂等/撤销/默认执行器复用）、Web 管理界面与公开分享页。37 项单测通过。
 
-对外契约见 `docs/schedule-service-api-contract.md`（v0.1，E-184 对齐依据，含待联调清单 V1–V7）。部署入口 http://schedule.xmnup.com/（rcadmin@10.32.56.212:3230，NPM 代理），运维与回退见 `docs/operations/deployment.md`，部署脚本 `deploy/deploy.sh`。
+对外契约见 `docs/schedule-service-api-contract.md`（v0.1，E-184 对齐依据，含待联调清单 V1–V7）。部署入口 http://schedule.xmnup.com/（rcadmin@10.32.56.212:3230，NPM 代理），运维与回退见 `docs/operations/deployment.md`，部署脚本 `deploy/deploy.sh`；连接/授权入口与受控测试对象见 `docs/operations/connections.md`（RC AsMe 重授权 vs Bot 自动续期、Multica webhook 材料、memory pak 签发路径）。
 
 未完成/待联调（如实边界）：memory 侧 `trigger-occurrence` 为新增接口待 E-184 实现（Schedule 已按契约调用）；Multica webhook 真实触发、RC JWT 刷新、Timeline Release Info 实源、模板模式 `publish_fields` 结果契约待联调；Web UI 为功能完整版，与 E-182 原型的视觉/交互全面对齐属后续增量。
 
