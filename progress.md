@@ -98,3 +98,10 @@
 - 新增应用内令牌自助管理：GET/POST/DELETE /api/v1/auth/tokens + 设置页"账号与登录令牌"（新建只显示一次+复制/吊销）；登录页文案去误导。53/53 测试，已部署。
 - E 的登录令牌签发并存服务器 ~/personal-schedule/E-LOGIN-TOKEN.txt（600），不在评论传递。
 - 鉴权主干方案（邮箱验证码/Google OAuth/恢复码 + 扩展无感层）仍待用户决策。
+
+## 2026-11-06 · 认证/HTTPS 缺陷修复轮（完成）
+
+- **PAT 吊销联动会话（迁移 v3）**：登录时把 token_id 写入 session 行；吊销令牌时同时删除其签发的会话。live 验证：吊销后 cookie 会话 401、原 bearer 再登录 400。新增回归测试（A 吊销 B 存活 + 自助签发可用），全量 55/55 通过。此前"吊销后立即失效"表述已纠正：现在才真正成立（旧会话 token_id 为 NULL 的过渡在部署说明中注明）。
+- **分享页 randomUUID 兼容**：uuid() 带 getRandomValues 回退。live 验证（非本地明文 HTTP 源，isSecureContext=false、randomUUID undefined）：uuid() 产出合法 v4、零 JS 错误，导入可点击不再抛错。
+- **HTTPS**：核验结论——公网 DNS 指向内网 IP，HTTP-01/TLS-ALPN 必然失败；NPM 无 DNS 插件；本机仅 *.int.rclabenv.com 有受信通配证书（公司管理、密钥不在本机）。可行路径 A：DNS-01（阿里云 API，需 E 提供 AccessKey，脚本 deploy/issue-cert.sh 已备好）；路径 B：公司 int.rclabenv.com 域名/证书流程。未跳过任何证书校验。
+- 已部署；身份主干方案（邮箱验证码/Google OAuth/恢复码）保持候选待用户选择。
