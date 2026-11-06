@@ -37,6 +37,18 @@ export const config = {
   // Extension install entry (share page install guide). The real Chrome Web
   // Store / CRX URL is deployment-specific; set SCHEDULE_EXT_INSTALL_URL.
   extInstallUrl: process.env.SCHEDULE_EXT_INSTALL_URL || '',
+  // Email one-time-code login (chosen identity backbone). RESEND_API_KEY /
+  // RESEND_FROM_EMAIL provision the mailer (Resend); without a key the codes
+  // are logged server-side only (dev fallback, clearly surfaced — never
+  // returned to the client). Registration is restricted to these domains.
+  authAllowedDomains: (process.env.SCHEDULE_AUTH_ALLOWED_DOMAINS || 'ringcentral.com')
+    .split(',').map((d) => d.trim().toLowerCase()).filter(Boolean),
+  authCodeTtlMinutes: intEnv('SCHEDULE_AUTH_CODE_TTL_MINUTES', 10),
+  authCodeMaxAttempts: intEnv('SCHEDULE_AUTH_CODE_MAX_ATTEMPTS', 5),
+  authResendIntervalSec: intEnv('SCHEDULE_AUTH_RESEND_INTERVAL_SEC', 60),
+  authResendApiKey: process.env.SCHEDULE_RESEND_API_KEY || '',
+  authResendFrom: process.env.SCHEDULE_RESEND_FROM_EMAIL || '',
+  authDevFallback: process.env.SCHEDULE_AUTH_DEV_FALLBACK === '1' || !process.env.SCHEDULE_RESEND_API_KEY,
   // HTTP client
   httpTimeoutMs: intEnv('SCHEDULE_HTTP_TIMEOUT_MS', 20000),
 };

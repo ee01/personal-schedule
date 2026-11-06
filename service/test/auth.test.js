@@ -79,3 +79,81 @@ test('self-service token creation returns a working one-time token', async () =>
     await new Promise((r) => ctx.server.close(r));
   }
 });
+
+test('email code login: request → verify creates user; guest data merges on login', async () => {
+  const ctx = await fresh();
+  try {
+    const meta = await ctx.req('GET', '/api/v1/auth/meta');
+    assert.deepEqual((await meta.json()).domains, ['ringcentral.com']);
+
+    // guest session first (open-and-use)
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    assert.equal(g.statusCode, 200);
+    const guestCookie = g.headers['set-cookie'][0].split(';')[0];
+    const guestBody = await g.json();
+    assert.equal(guestBody.isGuest, true);
+
+    // guest creates a task
+    const guestReq = await ctx.req('POST', '/api/v1/tasks', {
+      cookie: guestCookie,
+      body: {
+        type: 'asme', title: '访客任务', content: 'x',
+        scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 3600, timezone: 'UTC' },
+        config: { chatId: 'c' },
+      },
+    });
+    assert.equal(guestReq.statusCode, 200);
+
+    // domain restriction: non-allowed email rejected
+    const bad = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'someone@example.com' } });
+    assert.equal(bad.statusCode, 400);
+
+    // allowed email: dev fallback issues a code (logged, not returned)
+    const req1 = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'e2e.user@ringcentral.com' } });
+    assert.equal(req1.statusCode, 200);
+    assert.equal((await req1.json()).devFallback, true);
+
+    // rate limit: immediate second request is rejected
+    const req2 = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'e2e.user@ringcentral.com' } });
+    assert.equal(req2.statusCode, 400);
+
+    // wrong code: rejected with attempt counting
+    const wrong = await ctx.req('POST', '/api/v1/auth/email/verify', { body: { email: 'e2e.user@ringcentral.com', code: '000000' } });
+    assert.equal(wrong.statusCode, 400);
+
+    // correct code (read the hashed code — test uses the same hash path as
+    // production; extract via the internal helper)
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('e2e.user@ringcentral.com');
+    assert.ok(row, 'code row exists (dev fallback mode)');
+    // brute-force the 6-digit code against the hash (test-only; 10^6 worst case)
+    let code = null;
+    const sha256 = (await import('node:crypto')).createHash;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (sha256('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    assert.ok(code, 'dev-fallback code is recoverable from its hash for testing');
+
+    // verify with the guest cookie present → merge
+    const verify = await ctx.req('POST', '/api/v1/auth/email/verify', {
+      cookie: guestCookie,
+      body: { email: 'e2e.user@ringcentral.com', code },
+    });
+    assert.equal(verify.statusCode, 200);
+    const verifyBody = await verify.json();
+    assert.equal(verifyBody.user.email, 'e2e.user@ringcentral.com');
+    assert.equal(verifyBody.merged, 1, 'guest data merged into the real account');
+
+    // the merged task is now owned by the real account
+    const realCookie = verify.headers['set-cookie'][0].split(';')[0];
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: realCookie });
+    const taskList = await tasks.json();
+    const flat = Array.isArray(taskList) ? taskList : taskList.tasks || taskList;
+    assert.ok(flat.some((t) => t.title === '访客任务'), 'guest task now belongs to the logged-in user');
+
+    // guest account is gone; guest cookie no longer resolves
+    const meOld = await ctx.req('GET', '/api/v1/me', { cookie: guestCookie });
+    assert.notEqual(meOld.statusCode, 200);
+  } finally {
+    await new Promise((r) => ctx.server.close(r));
+  }
+});

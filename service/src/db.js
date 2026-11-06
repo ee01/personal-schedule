@@ -175,8 +175,25 @@ CREATE TABLE task_create_keys (
     // 30-day cookie stayed valid after its PAT was revoked.
     version: 3,
     up: `
-ALTER TABLE sessions ADD COLUMN token_id TEXT;
+ALTER TABLE sessions ADD COLUMN token_id;
 CREATE INDEX idx_sessions_token ON sessions(token_id);
+`,
+  },
+  {
+    // v4 (chosen identity backbone): guest accounts (open-and-use mode) and
+    // one-time email login codes (Resend).
+    version: 4,
+    up: `
+ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE login_codes (
+  email TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (email)
+);
+CREATE INDEX idx_login_codes_expiry ON login_codes(expires_at);
 `,
   },
 ];

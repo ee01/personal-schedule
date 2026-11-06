@@ -55,18 +55,52 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
   }));
 
   // ------------------------------------------------------------ auth
+  // guest session: open-and-use without any credential. Data lives under the
+  // guest account until the user logs in via email/PAT ("保存并登录"), at
+  // which point it is merged into the real account.
+  app.post('/api/v1/auth/guest', async (req, res) => {
+    const user = auth.createGuestUser();
+    const session = auth.createSession(user.id, null);
+    res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
+    return { ...publicUser(user), isGuest: true };
+  });
+
+  // login options for the auth UI (no secrets)
+  app.get('/api/v1/auth/meta', () => ({
+    domains: config.authAllowedDomains,
+    resendConfigured: Boolean(config.authResendApiKey),
+    devFallback: config.authDevFallback && !config.authResendApiKey,
+    emailLogin: true,
+  }));
+
+  // email one-time code (Resend when configured; dev fallback logs server-side)
+  app.post('/api/v1/auth/email/request', async (req) => {
+    return auth.requestEmailCode(String(req.body?.email || ''));
+  });
+
+  app.post('/api/v1/auth/email/verify', async (req, res) => {
+    const { email, code } = req.body || {};
+    const user = auth.verifyEmailCode(String(email || ''), String(code || ''));
+    const merged = mergeGuestOnLogin(req, user.id);
+    const session = auth.createSession(user.id, null);
+    res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
+    return { user: publicUser(user), ...merged };
+  });
+
   app.post('/api/v1/auth/login', async (req, res) => {
     const { token } = req.body;
     if (!token) throw badRequest('token required');
     const user = auth.userByBearer(String(token));
     if (!user) throw badRequest('invalid token');
+    // "保存并登录": if the visitor was in guest mode, merge their data first
+    const merged = mergeGuestOnLogin(req, user.id);
     // link the session to the login token so revoking the token also
     // invalidates the sessions it issued (regression: 30-day cookies used to
     // survive their PAT being revoked)
     const tokenId = auth.tokenIdByBearer(String(token));
     const session = auth.createSession(user.id, tokenId);
     res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
-    return { user: publicUser(user) };
+    return { user: publicUser(user), ...merged };
   });
 
   app.post('/api/v1/auth/logout', async (req, res) => {
@@ -77,7 +111,21 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     return { ok: true };
   });
 
-  app.get('/api/v1/me', (req) => publicUser(requireUser(db, auth, req)));
+  app.get('/api/v1/me', (req) => {
+    const user = requireUser(db, auth, req);
+    return { ...publicUser(user), isGuest: user.is_guest === 1, email: user.email };
+  });
+
+  // merge the current guest session's data into a real account on login
+  function mergeGuestOnLogin(req, realUserId) {
+    const cookies = req.headers.cookie || '';
+    const match = cookies.match(/ps_session=([^;]+)/);
+    if (!match) return { merged: 0 };
+    const guest = auth.userBySession(match[1]);
+    if (!guest || guest.is_guest !== 1) return { merged: 0 };
+    // new session first so the old guest cookie becomes invalid afterwards
+    return auth.mergeGuestIntoUser(guest.id, realUserId);
+  }
 
   // ------------------------------------------------------------ tokens (self-service)
   // A logged-in user can list/create/revoke their own login tokens, so the

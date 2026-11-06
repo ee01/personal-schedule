@@ -95,6 +95,13 @@ h3{font-size:13px;margin:20px 0 8px;color:var(--faint);text-transform:uppercase;
 
 <script>
 const S = { user: null, view: 'tasks', sub: 'all', tasks: [], tags: [], shares: [], q: '', detail: null };
+window.addEventListener('message', (event) => {
+  if (event.origin !== location.origin) return;
+  const data = event.data;
+  if (!data || data.channel !== 'personal-schedule-extension-v1' || data.type !== 'ready') return;
+  EXT.ready = true;
+  EXT.version = data.version || null;
+});
 const api = (path, opts) => fetch(`/api/v1${path}`, {
   headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...opts,
 }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
@@ -102,27 +109,96 @@ const esc = (s) => { const d = document.createElement('div'); d.textContent = s 
 const $ = (sel, el = document) => el.querySelector(sel);
 const TYPE_LABEL = { asme: '以我发送', bot: 'Bot 发送', ai_report: 'AI Report', outreach: '帮我问', agent_task: '帮我做', jira_automation: 'JIRA 托管' };
 
+const AUTH_META = { domains: ['ringcentral.com'], devFallback: true };
+const EXT = { ready: false, version: null };
+
 async function boot() {
-  const me = await api('/me');
+  let me = await api('/me');
+  // open-and-use: no session yet -> create a guest session so the app is
+  // immediately usable; data lives under the guest account until the user
+  // clicks 保存并登录 (email code / extension / token) and gets merged.
+  if (me.status !== 200) {
+    const g = await api('/auth/guest', { method: 'POST', body: '{}' });
+    if (g.status === 200) me = { status: 200, body: g.body };
+  }
+  const meta = await api('/auth/meta');
+  if (meta.status === 200) Object.assign(AUTH_META, meta.body);
   if (me.status === 200) { S.user = me.body; await reload(); }
   else renderLogin();
 }
 function renderLogin() {
   $('#app').innerHTML = `
-  <div class="wrap" style="max-width:420px;margin-top:12vh">
+  <div class="wrap" style="max-width:430px;margin-top:14vh">
     <div class="card">
       <h2>Personal Schedule</h2>
-      <div class="muted" style="margin-bottom:12px">输入登录令牌（PAT 式，仅显示一次；登录后可在 设置 → 账号与登录令牌 新建/复制）。扩展只在导入分享包时需要。</div>
-      <div class="field"><input type="password" id="tok" placeholder="pst_..."></div>
-      <button id="go">登录</button>
+      <div class="muted" style="margin-bottom:12px">邮箱验证码登录（限 ${esc(AUTH_META.domains.join(' / '))}）；也可使用 Personal AI 扩展或登录令牌。</div>
+      <div class="field"><input type="text" id="email" placeholder="name@${esc(AUTH_META.domains[0] || 'ringcentral.com')}"></div>
+      <div class="row">
+        <input type="text" id="code" placeholder="6 位验证码" style="flex:1;min-width:140px">
+        <button class="ghost" id="send-code">获取验证码</button>
+      </div>
+      <div class="muted" id="code-note" style="margin-bottom:10px"></div>
+      <button id="login-email" style="width:100%">登录 / 注册</button>
+      <div class="row" style="margin-top:14px;justify-content:space-between">
+        <button class="ghost small" id="use-ext">使用 Chrome 扩展登录</button>
+        <button class="ghost small" id="use-token">使用登录令牌（高级）</button>
+      </div>
+      <div id="tok-wrap" style="display:none;margin-top:12px">
+        <div class="field"><input type="password" id="tok" placeholder="pst_..."></div>
+        <button id="go" style="width:100%">用令牌登录</button>
+      </div>
+      <div id="ext-wrap" style="display:none;margin-top:12px">
+        <div class="muted" id="ext-note" style="margin-bottom:8px">检测 Personal AI 扩展…安装扩展并在其 Options 保存本站连接后，回到本页点击下方按钮即可登录（令牌不进入网页）。</div>
+        <button id="ext-login" style="width:100%">请求扩展登录</button>
+      </div>
     </div>
   </div>`;
+  AUTH_WIRE();
+}
+function AUTH_WIRE() {
+  $('#send-code').onclick = async () => {
+    const email = $('#email').value.trim();
+    const r = await api('/auth/email/request', { method: 'POST', body: JSON.stringify({ email }) });
+    if (r.status === 200) {
+      $('#code-note').textContent = r.body.devFallback
+        ? '验证码已生成（开发回退：码已写入服务器日志；配置 RESEND_API_KEY 后自动改为邮件发送）'
+        : `验证码已发送到邮箱（${r.body.expiresInMinutes} 分钟内有效）`;
+    } else $('#code-note').textContent = r.body.error || '发送失败';
+  };
+  $('#login-email').onclick = async () => {
+    const r = await api('/auth/email/verify', { method: 'POST', body: JSON.stringify({ email: $('#email').value.trim(), code: $('#code').value.trim() }) });
+    if (r.status === 200) {
+      if (r.body.merged) alert('访客数据已并入你的账号');
+      location.href = '/app';
+    } else alert(r.body.error || '验证失败');
+  };
+  $('#use-token').onclick = () => { const w = $('#tok-wrap'); w.style.display = w.style.display === 'none' ? '' : 'none'; };
+  $('#use-ext').onclick = () => { const w = $('#ext-wrap'); w.style.display = w.style.display === 'none' ? '' : 'none'; };
   const go = async () => {
     const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ token: $('#tok').value.trim() }) });
-    if (r.status === 200) { S.user = r.body.user; await reload(); } else alert('Token 无效');
+    if (r.status === 200) {
+      if (r.body.merged) alert('访客数据已并入你的账号');
+      location.href = '/app';
+    } else alert('Token 无效');
   };
   $('#go').onclick = go;
   $('#tok').onkeydown = (e) => e.key === 'Enter' && go();
+  $('#ext-login').onclick = () => {
+    if (!EXT.ready) { $('#ext-note').textContent = '未检测到扩展——请先安装 Personal AI 扩展并在其 Options 保存本站连接。'; return; }
+    // ask the extension to log this tab in; the extension performs the
+    // same-origin login itself — the long-lived PAT never enters page JS.
+    window.postMessage({ channel: 'personal-schedule-extension-v1', type: 'login-request' }, location.origin);
+    $('#ext-note').textContent = '已向扩展发送登录请求…';
+  };
+}
+
+// the "保存并登录" view (guest -> real account merge)
+function openAuth() {
+  renderLogin();
+  const note = document.createElement('div');
+  note.className = 'notice';
+  note.textContent = '当前为访客模式：把要保存的任务创建好，登录后会自动并入你的账号。';
+  $('#app').querySelector('.card').prepend(note);
 }
 
 async function refresh() {
@@ -142,13 +218,16 @@ function render() {
       <a data-v="settings" class="${S.view==='settings'?'active':''}">设置</a>
     </nav>
     <span class="spacer"></span>
-    <span class="muted">${esc(S.user.email)}</span>
-    <button class="ghost small" id="logout">退出</button>
+    ${S.user.isGuest ? '<span class="pill paused">访客模式</span>' : `<span class="muted">${esc(S.user.email)}</span>`}
+    ${S.user.isGuest ? '<button class="small" id="save-login">保存并登录</button>' : '<button class="ghost small" id="logout">退出</button>'}
   </div>`;
   const pages = { tasks: pageTasks, tags: pageTags, shares: pageShares, settings: pageSettings };
   $('#app').innerHTML = nav + `<div class="wrap">${pages[S.view]()}</div>`;
   document.querySelectorAll('.topbar nav a').forEach((a) => a.onclick = () => { S.view = a.dataset.v; render(); });
-  $('#logout').onclick = async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); };
+  const lo = $('#logout');
+  if (lo) lo.onclick = async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); };
+  const sl = $('#save-login');
+  if (sl) sl.onclick = openAuth;
   wire(S.view);
 }
 
