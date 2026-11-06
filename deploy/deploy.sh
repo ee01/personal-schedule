@@ -50,6 +50,15 @@ deploy_app() {
     "$HERE/../service/" "$HOST:personal-schedule/current/"
   # CLI and service must share one data dir: symlink current/data → the real one
   ssh_run 'rm -rf ~/personal-schedule/current/data && ln -sfn ~/personal-schedule/data ~/personal-schedule/current/data'
+  # durable secrets: ~/personal-schedule/service.env (chmod 600, server-only)
+  # is sourced by the wrapper below — deploy never touches it and it never
+  # enters the repo, logs or comments.
+  ssh_run 'cat > ~/personal-schedule/run-service.sh << "RSEOF"
+#!/bin/zsh
+[ -f "$HOME/personal-schedule/service.env" ] && source "$HOME/personal-schedule/service.env"
+exec /usr/local/bin/node "$HOME/personal-schedule/current/src/server.js"
+RSEOF
+chmod 700 ~/personal-schedule/run-service.sh'
   cat > /tmp/com.personal-schedule.service.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,8 +67,7 @@ deploy_app() {
   <key>Label</key><string>com.personal-schedule.service</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
-    <string>/Users/rcadmin/personal-schedule/current/src/server.js</string>
+    <string>/Users/rcadmin/personal-schedule/run-service.sh</string>
   </array>
   <key>WorkingDirectory</key><string>/Users/rcadmin/personal-schedule/current</string>
   <key>EnvironmentVariables</key>
