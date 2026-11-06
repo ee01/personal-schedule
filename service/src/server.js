@@ -58,6 +58,9 @@ export function buildApp(db) {
     res.end();
   });
   app.static('/share', path.join(webDir, 'share')); // public share SPA
+  // site-root favicon assets (handoff head-snippet paths); registered last so
+  // /app and /share keep priority
+  app.static('/', webDir);
   return { app, services };
 }
 
