@@ -12,13 +12,20 @@ function route() {
 function nav(view, sub) { location.hash = `#/${view}${sub ? '/' + sub : ''}`; }
 window.addEventListener('hashchange', route);
 
+function skeleton() {
+  $('#view').innerHTML = '<div class="skel" style="height:84px;margin-bottom:8px"></div>'.repeat(4);
+}
 async function refresh() {
+  if (!S.loaded) skeleton();
   const [tasks, tags, shares, tl, bots] = await Promise.all([
     api('/tasks'), api('/tags'), api('/shares'),
     api('/timeline/projects'), api('/bots'),
   ]);
   S.tasks = tasks.body || []; S.tags = tags.body || []; S.shares = shares.body || [];
   S.timeline = tl.body?.projects || []; S.bots = bots.body || { configured: false, bots: [] };
+  S.runs = {};
+  await Promise.all(S.tasks.map(async (t) => { const r = await api(`/tasks/${t.id}/runs`); S.runs[t.id] = r.body || []; }));
+  S.loaded = true;
 }
 
 async function boot() {
@@ -123,27 +130,36 @@ function filteredTasks() {
   return list;
 }
 function rowHTML(t) {
-  const src = { glip: '<span class="src" title="来自 Glip 定时发送">Glip</span>', import: '<span class="src" title="来自分享导入">分享导入</span>', jira: '<span class="src" title="来自 JIRA 托管">JIRA</span>' }[t.origin || 'web'] || '';
+  const src = { glip: 'Glip', import: '分享导入', jira: 'JIRA' }[t.origin || 'web'] || '';
   const rcp = recipientsText(t);
-  return `<div class="row task-row" id="row-${t.id}" tabindex="0" role="button" data-open="${t.id}">
+  const ev = lastRunSummary(t);
+  return `<div class="trow" id="row-${t.id}" tabindex="0" role="button" data-open="${t.id}">
     ${typeIc(t.type)}
-    <div class="grow">
-      <div class="row" style="gap:8px;align-items:center"><b>${esc(t.title)}</b>${src}<span class="pill ${t.status}">${STATUS_L[t.status] || t.status}</span></div>
-      <div class="t-meta">${esc(TYPE_LABEL[t.type] || t.type)}${rcp ? ` · 对象：${esc(rcp)}` : ''}${t.missing?.length ? ` · <span style="color:var(--warn)">待补全：${t.missing.map(esc).join('、')}</span>` : ''}</div>
-      <div class="t-tags">${(t.tags || []).map((g) => `<span class="tag" style="--tc:${g.color}">#${esc(g.name)}</span>`).join('')}</div>
-    </div>
-    <div class="t-next mono" data-at="${t.next_run_at || ''}">${fmtNext(t.next_run_at)}<div class="muted" style="font-size:var(--fs-xs)">${t.timezone ? tzLabel(t.timezone) : ''}</div></div>
+    <div class="grow"><b>${esc(t.title)}</b>${src ? ` <span class="muted">· ${src}</span>` : ''}<div class="t-meta">${esc(TYPE_LABEL[t.type]||t.type)}${rcp ? ' · 对象：' + esc(rcp) : ''}${(t.missing||[]).length ? ' · <span style="color:var(--warn)">待补全：' + t.missing.map(esc).join('、') + '</span>' : ''}</div></div>
+    <div class="tags">${(t.tags || []).map((g) => `<span class="tag" style="--tc:${g.color||'#cdf26b'}">#${esc(g.name)}</span>`).join('')}</div>
+    <div class="next">${fmtNext(t.next_run_at)}<div class="s">${t.timezone ? tzLabel(t.timezone) : ''}</div></div>
+    <div class="lastrun">${ev}</div>
+    <span class="pill ${t.status}">${STATUS_L[t.status]||t.status}</span>
   </div>`;
+}
+function lastRunSummary(t) {
+  const r = S.runs && S.runs[t.id] && S.runs[t.id][0]; if (!r) return '<span class="muted">—</span>';
+  const res = safeParse(r.result || '{}');
+  const segs = [['投递', r.status], ['执行', res.status || r.status],
+    ['送达', res.evidence && (res.evidence.postId || res.evidence.chatId) ? 'sent' : null],
+    ['通知', r.notified ? '已通知' : '未通知']];
+  return segs.filter(([, v]) => v).map(([l, v]) => `<span class="ev ${/成功|sent|已通知/.test(v) ? 'ok' : 'err'}">${l}</span>`).join('');
 }
 function pageTasks() {
   const isAll = S.sub === 'all' && !S.filterStatus.length && !S.filterType.length && !S.q;
   let list = filteredTasks();
+  const nextT = S.tasks.filter((t) => t.status === 'active' && t.next_run_at).sort((a, b) => a.next_run_at - b.next_run_at)[0];
   const stats = isAll ? `
-    <div class="stat-grid">
-      <div class="stat"><div class="s-l">下一次运行</div><div class="s-v mono countdown" data-at="${(S.tasks.filter(t=>t.status==='active').map(t=>t.next_run_at).filter(Boolean).sort((a,b)=>a-b)[0])||''}"></div><div class="s-sub">${esc((S.tasks.filter(t=>t.next_run_at).sort((a,b)=>a.next_run_at-b.next_run_at)[0]||{}).title||'')}</div></div>
-      <div class="stat"><div class="s-l">已排程</div><div class="s-v mono">${countBy((t)=>t.status==='active')}</div><div class="s-sub"><a data-filter="active">查看</a></div></div>
-      <div class="stat"><div class="s-l">需要处理</div><div class="s-v mono">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s-sub"><a data-filter="needs_attention">查看</a></div></div>
-      <div class="stat"><div class="s-l">待补全</div><div class="s-v mono">${countBy((t)=>t.status==='inactive')}</div><div class="s-sub"><a data-nav="setup">去补全</a></div></div>
+    <div class="stats">
+      <div class="stat next"><div class="k">下一次运行</div><div class="v countdown" data-at="${nextT ? nextT.next_run_at : ''}"></div><div class="s">${esc(nextT ? nextT.title : '—')}</div></div>
+      <div class="stat"><div class="k">已排程</div><div class="v">${countBy((t)=>t.status==='active')}</div><div class="s"><a data-filter="active">查看</a></div></div>
+      <div class="stat"><div class="k">需要处理</div><div class="v">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s"><a data-filter="needs_attention">查看</a></div></div>
+      <div class="stat"><div class="k">待补全</div><div class="v">${countBy((t)=>t.status==='inactive')}</div><div class="s"><a data-nav="setup">去补全</a></div></div>
     </div>` : '';
   const chips = [...S.filterStatus.map((s)=>`<span class="chip" data-rm-s="${s}">${STATUS_L[s]} ×</span>`), ...S.filterType.map((t)=>`<span class="chip" data-rm-t="${t}">${(TYPE_LABEL[t]||'').split(' ')[0]} ×</span>`)];
   const toolbar = `
@@ -155,7 +171,7 @@ function pageTasks() {
       </div>
       <span class="spacer"></span>
       ${S.sub.startsWith('tag:') && !S.sub.startsWith('tag:new') ? `<button class="btn ghost sm" id="btnShare">分享整包</button>` : ''}
-      <div class="seg" id="listSeg"><button class="seg-b" data-seg="list">列表</button><button class="seg-b" data-seg="week">未来 7 天</button></div>
+      <div class="seg" id="listSeg"><button class="seg-b ${S.viewMode!=="week"?"on":""}" data-seg="list">列表</button><button class="seg-b ${S.viewMode==="week"?"on":""}" data-seg="week">未来 7 天</button></div>
     </div>`;
   // 分组排序（L3）
   const groups = [
@@ -171,8 +187,31 @@ function pageTasks() {
     body += `<div class="group-h"><span>${g}</span><span class="count">${items.length}</span></div>` + items.map(rowHTML).join('');
   }
   if (!body) body = emptyState();
-  $('#view').innerHTML = stats + toolbar + body;
-  $('#listSeg .seg-b[data-seg="week"]').classList.toggle('on', false);
+  if (S.viewMode === 'week') {
+    $('#view').innerHTML = stats + toolbar + weekHTML(list);
+  } else {
+    $('#view').innerHTML = stats + toolbar + body;
+  }
+  $$('#listSeg .seg-b').forEach((b) => b.classList.toggle('on', b.dataset.seg === (S.viewMode || 'list')));
+}
+function weekHTML(list) {
+  const days = [];
+  const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(start.getTime() + i * 864e5);
+    const items = list.filter((t) => t.status === 'active' && t.next_run_at && new Date(t.next_run_at * 1000).toDateString() === d.toDateString());
+    const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+    const dayHtml = '<div class="day' + (i === 0 ? ' today' : '') + '"><div class="dh"><b>' + (d.getMonth() + 1) + '/' + d.getDate() + '</b><span>周' + wd + '</span></div>';
+    const itemsHtml = items.map((t) => {
+      const colorVar = 'var(--t-' + (t.type === 'ai_report' ? 'report' : t.type) + ')';
+      const style = '--c:' + colorVar + (t.status === 'paused' ? ';border-left-style:dashed;opacity:.6' : '');
+      const time = new Date(t.next_run_at * 1000).toTimeString().slice(0, 5);
+      return '<button class="occ" style="' + style + '" data-open="' + t.id + '"><span class="tm">' + time + '</span> ' + esc(t.title) + (t.status === 'paused' ? ' · 暂停' : '') + '</button>';
+    }).join('');
+    const empty = items.length ? '' : '<div class="muted" style="padding:8px 4px;font-size:12px">—</div>';
+    days.push(dayHtml + itemsHtml + empty + '</div>');
+  }
+  return '<div class="agenda">' + days.join('') + '</div><div class="muted" style="margin-top:10px">时间按你的浏览器时区计算；点击时间块打开任务详情。</div>';
 }
 function emptyState() {
   if (S.q || S.filterStatus.length || S.filterType.length) return `<div class="empty"><div class="e-ic">${ic('search')}</div><div class="e-t">没有匹配的任务</div><button class="btn ghost" data-clear="1">清除筛选</button></div>`;
@@ -509,7 +548,7 @@ function wire() {
   $$('#view [data-new-type]').forEach((b) => b.onclick = () => newFlow(b.dataset.newType));
   $$('#view [data-new-tag]').forEach((b) => b.onclick = () => newFlow(null, { tags: [b.dataset.newTag] }));
   $$('#tagSeg .seg-b').forEach((b) => b.onclick = () => nav('tasks/' + (b.dataset.seg === 'tag' ? 'all' : 'type:asme')));
-  $$('#listSeg .seg-b').forEach((b) => b.onclick = () => {});
+  $$('#listSeg .seg-b').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
   $$('#sidebar [data-menu="id-menu"]').forEach((b) => b.onclick = () => openMenu(b, `
     <button class="m-item" data-idact="bind-email">绑定邮箱</button>
     <button class="m-item" data-idact="bind-ext">绑定 Personal AI 扩展</button>
