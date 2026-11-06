@@ -53,6 +53,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .pill.needs_attention{background:var(--bad-soft);color:var(--bad)}
 .pill.pending,.pill.leased,.pill.dispatched{background:var(--brand-soft);color:var(--brand)}
 .pill.completed,.pill.succeeded{background:var(--ok-soft);color:var(--ok)}
+.pill.draft{background:rgba(139,147,161,.13);color:var(--muted)}
 .pill.failed{background:var(--bad-soft);color:var(--bad)}
 .tag{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:6px;padding:1px 8px;font-size:11.5px;margin-right:6px;cursor:pointer}
 table{width:100%;border-collapse:collapse}
@@ -106,6 +107,13 @@ const api = (path, opts) => fetch(`/api/v1${path}`, {
   headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...opts,
 }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
 const esc = (s) => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+function uuid(){
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x)=>x.toString(16).padStart(2,'0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
 const $ = (sel, el = document) => el.querySelector(sel);
 const TYPE_LABEL = { asme: '以我发送', bot: 'Bot 发送', ai_report: 'AI Report', outreach: '帮我问', agent_task: '帮我做', jira_automation: 'JIRA 托管' };
 
@@ -183,12 +191,20 @@ function AUTH_WIRE() {
   };
   $('#go').onclick = go;
   $('#tok').onkeydown = (e) => e.key === 'Enter' && go();
-  $('#ext-login').onclick = () => {
+  $('#ext-login').onclick = async () => {
     if (!EXT.ready) { $('#ext-note').textContent = '未检测到扩展——请先安装 Personal AI 扩展并在其 Options 保存本站连接。'; return; }
-    // ask the extension to log this tab in; the extension performs the
-    // same-origin login itself — the long-lived PAT never enters page JS.
-    window.postMessage({ channel: 'personal-schedule-extension-v1', type: 'login-request' }, location.origin);
-    $('#ext-note').textContent = '已向扩展发送登录请求…';
+    if (!AUTH_META.loginBridge || !AUTH_META.loginBridge.enabled) {
+      $('#ext-note').textContent = '扩展登录桥暂未启用：待本站受信 HTTPS 就绪后开放（已可用邮箱验证码或令牌登录）。';
+      return;
+    }
+    // register a single-use nonce with the current (guest) session, then ask
+    // the extension to exchange its PAT for a session — the PAT never enters
+    // page JS (converged contract with the E-184 extension).
+    const nonce = uuid();
+    const reg = await api('/auth/bridge/register', { method: 'POST', body: JSON.stringify({ nonce }) });
+    if (reg.status !== 200) { $('#ext-note').textContent = reg.body.error || '注册失败'; return; }
+    window.postMessage({ channel: 'personal-schedule-extension-v1', type: 'login-request', nonce }, location.origin);
+    $('#ext-note').textContent = '已向扩展发送登录请求（一次性凭据，120 秒内有效）…';
   };
 }
 
@@ -274,11 +290,11 @@ function pageTasks() {
             ${t.missing?.length?`<div class="muted" style="color:var(--warn);margin-top:3px">待补全：${t.missing.map(esc).join('、')}</div>`:''}
           </div>
         </div></td>
-      <td><span class="pill ${t.status}">${{active:'运行中',paused:'已暂停',inactive:'未启用',needs_attention:'需注意'}[t.status]||t.status}</span></td>
+      <td><span class="pill ${t.status}">${{active:'运行中',paused:'已暂停',draft:'草稿',inactive:'未启用',needs_attention:'需注意'}[t.status]||t.status}</span></td>
       <td>${fmtNext(t)}</td>
       <td style="white-space:nowrap">
         ${t.status==='active'?`<button class="ghost small" data-pause="${t.id}">暂停</button>`:''}
-        ${['paused','inactive'].includes(t.status)?`<button class="small" data-enable="${t.id}">启用</button>`:''}
+        ${['paused','inactive','draft'].includes(t.status)?`<button class="small" data-enable="${t.id}">启用</button>`:''}
         <button class="ghost small" data-del="${t.id}">删除</button>
       </td>
     </tr>`).join('');

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, publicBaseUrl } from './config.js';
 import {
-  requireUser,
+  requireUser, bearerToken,
 } from './auth.js';
 import {
   badRequest, notFound, forbidden, parseJson, nowSec, newId,
@@ -71,19 +71,68 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     resendConfigured: Boolean(config.authResendApiKey),
     devFallback: config.authDevFallback && !config.authResendApiKey,
     emailLogin: true,
+    loginBridge: { enabled: config.authLoginBridgeEnabled, nonceTtlSec: config.authBridgeNonceTtlSec, channel: 'personal-schedule-extension-v1' },
   }));
+
+  // session rotation: on every login the previously presented session (e.g.
+  // the guest cookie) is explicitly destroyed — only the fresh cookie remains
+  function rotateSession(req, res, userId, tokenId = null) {
+    const cookies = req.headers.cookie || '';
+    const match = cookies.match(/ps_session=([^;]+)/);
+    if (match) auth.destroySession(match[1]);
+    const session = auth.createSession(userId, tokenId);
+    res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
+  }
 
   // email one-time code (Resend when configured; dev fallback logs server-side)
   app.post('/api/v1/auth/email/request', async (req) => {
     return auth.requestEmailCode(String(req.body?.email || ''));
   });
 
+  // ------------------------------------------------ login bridge (E-184 contract)
+  // Converged single interface with the extension (both repos): the page
+  // registers a single-use nonce with its (guest) session, then posts
+  // {channel:'personal-schedule-extension-v1', type:'login-request', nonce}
+  // to its own origin; the extension verifies the page origin matches its
+  // configured Schedule service and calls the exchange below with the PAT.
+  // The server consumes the nonce exactly once (anti-replay), requires the
+  // PAT (only the extension holds it) and rotates the old session away.
+  // The PAT never enters page JS. Disabled until trusted HTTPS is live
+  // (SCHEDULE_AUTH_LOGIN_BRIDGE=1).
+  app.post('/api/v1/auth/bridge/register', (req) => {
+    if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
+    const user = requireUser(db, auth, req);
+    const nonce = String(req.body?.nonce || '').trim();
+    if (!nonce || nonce.length < 16 || nonce.length > 128) throw badRequest('nonce required (16-128 chars)');
+    if (user.is_guest !== 1) throw badRequest('仅访客会话需要扩展登录（已登录用户无需此流程）');
+    db.prepare('DELETE FROM login_bridges WHERE expires_at < ?').run(nowSec());
+    db.prepare('INSERT OR REPLACE INTO login_bridges (nonce, expires_at) VALUES (?,?)').run(
+      nonce, nowSec() + config.authBridgeNonceTtlSec,
+    );
+    return { registered: true, ttlSec: config.authBridgeNonceTtlSec };
+  });
+
+  app.post('/api/v1/auth/bridge/exchange', async (req, res) => {
+    if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
+    const nonce = String(req.body?.nonce || '').trim();
+    if (!nonce || nonce.length > 128) throw badRequest('nonce required');
+    const pat = bearerToken(req);
+    const user = pat ? auth.userByBearer(pat) : null;
+    if (!user) throw badRequest('invalid token');
+    const consumed = db
+      .prepare('DELETE FROM login_bridges WHERE nonce = ? AND expires_at > ?')
+      .run(nonce, nowSec());
+    if (consumed.changes === 0) throw badRequest('nonce 无效或已使用');
+    const merged = mergeGuestOnLogin(req, user.id);
+    rotateSession(req, res, user.id, auth.tokenIdByBearer(pat));
+    return { user: publicUser(user), ...merged };
+  });
+
   app.post('/api/v1/auth/email/verify', async (req, res) => {
     const { email, code } = req.body || {};
     const user = auth.verifyEmailCode(String(email || ''), String(code || ''));
     const merged = mergeGuestOnLogin(req, user.id);
-    const session = auth.createSession(user.id, null);
-    res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
+    rotateSession(req, res, user.id, null);
     return { user: publicUser(user), ...merged };
   });
 
@@ -98,8 +147,7 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     // invalidates the sessions it issued (regression: 30-day cookies used to
     // survive their PAT being revoked)
     const tokenId = auth.tokenIdByBearer(String(token));
-    const session = auth.createSession(user.id, tokenId);
-    res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
+    rotateSession(req, res, user.id, tokenId);
     return { user: publicUser(user), ...merged };
   });
 
@@ -216,6 +264,9 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
 
   app.post('/api/v1/tasks', (req) => {
     const user = requireUser(db, auth, req);
+    // guest boundary: visitor tasks are drafts only — the runner never
+    // schedules, executes, publishes or binds credentials for a guest
+    if (user.is_guest === 1) req.body = { ...req.body, status: 'draft' };
     // idempotencyKey (per-owner) makes unknown create outcomes safely
     // retryable: a replay returns the first task instead of a duplicate
     const { task, missing, replayed } = store.createTask(user.id, req.body);
@@ -247,6 +298,10 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
   app.post('/api/v1/tasks/{id}/status', (req) => {
     const user = requireUser(db, auth, req);
     const { status } = req.body;
+    // guest boundary: visitor tasks stay drafts — no scheduling/execution
+    if (user.is_guest === 1 && status === 'active') {
+      throw badRequest('访客任务为草稿：请先登录（保存并登录）后再启用调度/执行');
+    }
     const task = store.setStatus(user.id, req.params.id, status);
     schedulePreview(task.id);
     return { task };
@@ -475,6 +530,8 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
 
   app.put('/api/v1/connections/{key}', (req) => {
     const user = requireUser(db, auth, req);
+    // guest boundary: no credential binding for visitor accounts
+    if (user.is_guest === 1) throw badRequest('访客模式不能保存凭据：请先登录（保存并登录）');
     const key = req.params.key;
     if (!['rc_user', 'rc_bot', 'memory', 'multica', 'jira'].includes(key)) throw badRequest('unknown connection key');
     const value = req.body?.value ?? req.body;

@@ -48,7 +48,15 @@ export const config = {
   authResendIntervalSec: intEnv('SCHEDULE_AUTH_RESEND_INTERVAL_SEC', 60),
   authResendApiKey: process.env.SCHEDULE_RESEND_API_KEY || '',
   authResendFrom: process.env.SCHEDULE_RESEND_FROM_EMAIL || '',
-  authDevFallback: process.env.SCHEDULE_AUTH_DEV_FALLBACK === '1' || !process.env.SCHEDULE_RESEND_API_KEY,
+  // dev fallback (codes logged server-side) is ONLY for explicit test/dev
+  // environments: SCHEDULE_AUTH_DEV_FALLBACK=1. Without a Resend key and
+  // without this flag, production must refuse email login ("邮件服务未配置")
+  // — never generate usable codes into logs.
+  authDevFallback: process.env.SCHEDULE_AUTH_DEV_FALLBACK === '1',
+  // extension auto-login bridge stays disabled until trusted HTTPS is live
+  // (coordinator boundary); enable explicitly with SCHEDULE_AUTH_LOGIN_BRIDGE=1.
+  authLoginBridgeEnabled: process.env.SCHEDULE_AUTH_LOGIN_BRIDGE === '1',
+  authBridgeNonceTtlSec: intEnv('SCHEDULE_AUTH_BRIDGE_NONCE_TTL_SEC', 120),
   // HTTP client
   httpTimeoutMs: intEnv('SCHEDULE_HTTP_TIMEOUT_MS', 20000),
 };

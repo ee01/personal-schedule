@@ -141,7 +141,7 @@ export function createTaskStore(db, getConnection) {
       type,
       title: input.title,
       content: input.content || '',
-      status: missing.length ? 'inactive' : input.status === 'paused' ? 'paused' : 'active',
+      status: missing.length ? 'inactive' : input.status === 'draft' ? 'draft' : input.status === 'paused' ? 'paused' : 'active',
       schedule_spec: JSON.stringify(scheduleSpec),
       config: JSON.stringify(config),
       notify: JSON.stringify(normalizeNotify(notify, type)),
@@ -270,7 +270,7 @@ export function createTaskStore(db, getConnection) {
 
   function setStatus(userId, taskId, status) {
     const task = getUserTask(userId, taskId);
-    if (!['active', 'paused', 'inactive', 'needs_attention'].includes(status)) {
+    if (!['active', 'paused', 'draft', 'inactive', 'needs_attention'].includes(status)) {
       throw badRequest('invalid status');
     }
     if (status === 'active') {

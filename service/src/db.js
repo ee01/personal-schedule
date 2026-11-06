@@ -196,6 +196,17 @@ CREATE TABLE login_codes (
 CREATE INDEX idx_login_codes_expiry ON login_codes(expires_at);
 `,
   },
+  {
+    // v5: one-time nonces for the extension login bridge (single-use,
+    // short TTL; consumed atomically by DELETE in the exchange route)
+    version: 5,
+    up: `
+CREATE TABLE login_bridges (
+  nonce TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
+);
+`,
+  },
 ];
 
 function migrate(db) {

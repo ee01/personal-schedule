@@ -79,7 +79,7 @@ export function createAuth(db) {
    * hashed; it is delivered via Resend when configured, or logged server-side
    * in the dev fallback (never returned to the client).
    */
-  function requestEmailCode(rawEmail) {
+  async function requestEmailCode(rawEmail) {
     const email = allowedEmail(rawEmail);
     if (!email) {
       throw badRequest(`仅支持这些邮箱域名注册：${config.authAllowedDomains.join(', ')}`);
@@ -90,6 +90,11 @@ export function createAuth(db) {
       const wait = prior.created_at + config.authResendIntervalSec - now;
       throw badRequest(`请求过于频繁，请 ${wait} 秒后再试`);
     }
+    if (!config.authResendApiKey && !config.authDevFallback) {
+      // production without a mailer: refuse BEFORE any code is generated or
+      // stored — email login is explicitly unavailable until configured.
+      throw badRequest('邮件服务未配置：邮箱登录暂不可用（请管理员配置 RESEND_API_KEY）');
+    }
     const code = String(Math.floor(100000 + Math.random() * 900000));
     db.prepare(
       `INSERT INTO login_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?,?,?,?,?)
@@ -97,12 +102,12 @@ export function createAuth(db) {
     ).run(email, sha256Hex(code), now + config.authCodeTtlMinutes * 60, 0, now);
 
     if (config.authDevFallback && !config.authResendApiKey) {
-      // dev fallback: the code never leaves the server — it is logged for the
-      // administrator only (surfaced in /api/v1/health meta and server log)
+      // explicit test/dev environments only: the code never leaves the server
+      // (logged for the administrator, surfaced as devFallback in the response)
       console.log(`[auth] dev fallback login code for ${email}: ${code}`);
       return { sent: false, devFallback: true, expiresInMinutes: config.authCodeTtlMinutes };
     }
-    return { sent: sendLoginEmail(email, code), expiresInMinutes: config.authCodeTtlMinutes };
+    return { sent: await sendLoginEmail(email, code), expiresInMinutes: config.authCodeTtlMinutes };
   }
 
   function verifyEmailCode(rawEmail, rawCode) {

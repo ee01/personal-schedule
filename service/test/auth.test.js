@@ -3,10 +3,18 @@
 //   (previously a 30-day session survived its PAT being revoked)
 // - token self-service (list/create) works for a logged-in user
 import test from 'node:test';
+// dev fallback is explicit-test-env-only (production without a Resend key
+// must refuse); this suite opts in.
+process.env.SCHEDULE_AUTH_DEV_FALLBACK = '1';
 import assert from 'node:assert/strict';
 import { openDb } from '../src/db.js';
 import { buildApp } from '../src/server.js';
 import { listen } from '../src/http.js';
+import { config as __config } from '../src/config.js';
+
+// this suite opts into the explicit dev fallback (test env only; production
+// refuses without a Resend key)
+__config.authDevFallback = true;
 
 async function fresh() {
   const db = openDb(':memory:');
@@ -155,5 +163,166 @@ test('email code login: request → verify creates user; guest data merges on lo
     assert.notEqual(meOld.statusCode, 200);
   } finally {
     await new Promise((r) => ctx.server.close(r));
+  }
+});
+
+test('convergence round: production without Resend key refuses email login (no code stored)', async () => {
+  const saved = __config.authDevFallback;
+  __config.authDevFallback = false; // simulate production (no key, no dev flag)
+  const ctx = await fresh();
+  try {
+    const r = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'prod.user@ringcentral.com' } });
+    assert.equal(r.statusCode, 400);
+    assert.match((await r.json()).error, /邮件服务未配置/);
+    const row = ctx.db.prepare('SELECT * FROM login_codes WHERE email = ?').get('prod.user@ringcentral.com');
+    assert.ok(!row, 'no usable code was generated or stored in production mode');
+  } finally {
+    __config.authDevFallback = saved;
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('email code is single-use: concurrent replay of the same code fails exactly once', async () => {
+  const ctx = await fresh();
+  try {
+    await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'replay.user@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('replay.user@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const two = await Promise.all([
+      ctx.req('POST', '/api/v1/auth/email/verify', { body: { email: 'replay.user@ringcentral.com', code } }),
+      ctx.req('POST', '/api/v1/auth/email/verify', { body: { email: 'replay.user@ringcentral.com', code } }),
+    ]);
+    const ok = two.filter((r) => r.statusCode === 200);
+    assert.equal(ok.length, 1, 'exactly one concurrent verify wins (code consumed once)');
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('session rotation: after login the previous cookie session is invalid', async () => {
+  const ctx = await fresh();
+  try {
+    // first login creates session A
+    const tok = ctx.services.auth.issueToken(ctx.user.id, 't1');
+    const first = await ctx.req('POST', '/api/v1/auth/login', { body: { token: tok } });
+    const cookieA = first.headers['set-cookie'][0].split(';')[0];
+    assert.equal((await ctx.req('GET', '/api/v1/me', { cookie: cookieA })).statusCode, 200);
+    // second login rotates: cookie A must die
+    const second = await ctx.req('POST', '/api/v1/auth/login', { cookie: cookieA, body: { token: tok } });
+    const cookieB = second.headers['set-cookie'][0].split(';')[0];
+    assert.equal((await ctx.req('GET', '/api/v1/me', { cookie: cookieA })).statusCode, 401, 'old session rotated out');
+    assert.equal((await ctx.req('GET', '/api/v1/me', { cookie: cookieB })).statusCode, 200, 'new session valid');
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('existing account email login returns the same user; repeat login does not duplicate tasks', async () => {
+  const ctx = await fresh();
+  try {
+    // E's existing-account case: user created previously (e.g. by CLI)
+    const existing = ctx.services.auth.ensureUser('e.user@ringcentral.com');
+    await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'e.user@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('e.user@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { body: { email: 'e.user@ringcentral.com', code } });
+    const body = await v.json();
+    assert.equal(body.user.id, existing.id, 'existing account logs in — no duplicate account');
+
+    // repeat login (second code) does not duplicate merged drafts
+    const cookie1 = v.headers['set-cookie'][0].split(';')[0];
+    await ctx.req('POST', '/api/v1/tasks', { cookie: cookie1, body: {
+      type: 'asme', title: '只此一份', content: 'x',
+      scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 3600, timezone: 'UTC' },
+      config: { chatId: 'c' },
+    } });
+    await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'e.user@ringcentral.com' } });
+    const row2 = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('e.user@ringcentral.com');
+    let code2 = null;
+    for (let i = 100000; i <= 999999 && !code2; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row2.code_hash) code2 = String(i);
+    }
+    const v2 = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie: cookie1, body: { email: 'e.user@ringcentral.com', code: code2 } });
+    const cookie2 = v2.headers['set-cookie'][0].split(';')[0];
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: cookie2 });
+    const list = await tasks.json();
+    const flat = Array.isArray(list) ? list : list.tasks || [];
+    assert.equal(flat.filter((t) => t.title === '只此一份').length, 1, 'repeat login does not duplicate tasks');
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('guest boundary: drafts only — no scheduling, no connections, merge moves drafts', async () => {
+  const ctx = await fresh();
+  try {
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const guestCookie = g.headers['set-cookie'][0].split(';')[0];
+    // guest task is forced to draft
+    const created = await ctx.req('POST', '/api/v1/tasks', { cookie: guestCookie, body: {
+      type: 'asme', title: '访客草稿', content: 'x',
+      scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) - 60, timezone: 'UTC' },
+      config: { chatId: 'c' },
+      status: 'active', // guest tries to go live — must be forced to draft
+    } });
+    assert.equal(created.statusCode, 200);
+    // guests can never complete config (credential binding is blocked), so the
+    // task lands as draft or inactive — either way it is unschedulable
+    assert.ok(['draft', 'inactive'].includes((await created.json()).task.status), 'guest task is not schedulable');
+    // guest cannot activate
+    const activate = await ctx.req('POST', `/api/v1/tasks/${(await created.json()).task.id}/status`, {
+      cookie: guestCookie, body: { status: 'active' },
+    });
+    assert.equal(activate.statusCode, 400, 'guest activation blocked');
+    // runner never schedules a draft even if due
+    await ctx.services.runner.tick();
+    const occ = ctx.db.prepare('SELECT COUNT(*) n FROM occurrences').get();
+    assert.equal(occ.n, 0, 'no occurrences scheduled for guest drafts');
+    // guest cannot bind credentials
+    const conn = await ctx.req('PUT', '/api/v1/connections/rc_user', {
+      cookie: guestCookie, body: { value: { token: 'x' } },
+    });
+    assert.equal(conn.statusCode, 400, 'guest credential binding blocked');
+    // login → merge moves the draft to the real account
+    const tok = ctx.services.auth.issueToken(ctx.user.id, 'g');
+    const login = await ctx.req('POST', '/api/v1/auth/login', { cookie: guestCookie, body: { token: tok } });
+    const realCookie = login.headers['set-cookie'][0].split(';')[0];
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: realCookie });
+    const flat = Array.isArray(await tasks.json()) ? await tasks.json() : (await tasks.json()).tasks;
+    const merged = flat.find((t) => t.title === '访客草稿');
+    assert.ok(merged, 'draft merged into the real account');
+    assert.ok(['draft', 'inactive'].includes(merged.status), 'merged guest task stays unschedulable until the owner reviews and enables');
+    const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
+    assert.equal(guests.n, 0, 'guest account cleaned up');
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('legacy sessions (pre-v3, token_id NULL) survive token revocation — documented exception', async () => {
+  const ctx = await fresh();
+  try {
+    const tok = ctx.services.auth.issueToken(ctx.user.id, 'legacy');
+    const login = await ctx.req('POST', '/api/v1/auth/login', { body: { token: tok } });
+    const cookie = login.headers['set-cookie'][0].split(';')[0];
+    // simulate a pre-v3 session row (token_id NULL)
+    const sessionId = ctx.db.prepare('SELECT id FROM sessions WHERE user_id = ? LIMIT 1').get(ctx.user.id).id;
+    ctx.db.prepare('UPDATE sessions SET token_id = NULL WHERE id = ?').run(sessionId);
+    // revoke the token
+    const row = ctx.db.prepare('SELECT id FROM tokens WHERE label = ?').get('legacy');
+    const del = await ctx.req('DELETE', `/api/v1/auth/tokens/${row.id}`, { cookie });
+    assert.equal(del.statusCode, 200);
+    // the legacy session keeps running until expiry — documented exception
+    assert.equal((await ctx.req('GET', '/api/v1/me', { cookie })).statusCode, 200);
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
   }
 });
