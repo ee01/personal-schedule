@@ -5,32 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Personal Schedule · 分享</title>
 <style>
-:root{--bg:#f6f7fb;--card:#fff;--ink:#1c2333;--muted:#6b7280;--line:#e5e8f0;--brand:#4f46e5;--ok:#059669;--warn:#d97706;--bad:#dc2626}
-*{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
-.wrap{max-width:960px;margin:0 auto;padding:32px 20px}
+/* dark tokens aligned with the confirmed prototype / main app */
+:root{--bg:#0a0c0f;--bg2:#0e1116;--card:#12151a;--line:#232932;--line2:#2c333e;--ink:#e8eaed;--muted:#8b93a1;--faint:#5c6470;--brand:#7c8cff;--brand-soft:rgba(124,140,255,.13);--ok:#4ade80;--ok-soft:rgba(74,222,128,.13);--warn:#fbbf24;--warn-soft:rgba(251,191,36,.13);--bad:#f87171;--bad-soft:rgba(248,113,113,.13);--t-asme:#7fe0c3;--t-bot:#76b8ff;--t-report:#f2b24c;--t-outreach:#f58d7a;--t-agent:#b9a4ff;--t-jira:#e2a4ff}
+*{box-sizing:border-box}html{color-scheme:dark}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(1200px 500px at 70% -10%,rgba(124,140,255,.07),transparent),var(--bg);color:var(--ink)}
+.wrap{max-width:960px;margin:32px auto;padding:0 20px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
-h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
-.task{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;background:#fff}
-.task input[type=checkbox]{margin-top:4px;width:16px;height:16px}
+h1{font-size:22px;margin:0 0 4px;font-weight:700}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.task{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:11px;margin-bottom:10px;background:var(--bg2)}
+.task input[type=checkbox]{margin-top:4px;width:16px;height:16px;accent-color:var(--brand)}
 .task .t-title{font-weight:600}.task .t-meta{color:var(--muted);font-size:12px;margin-top:2px}
-.tag{display:inline-block;background:#eef0ff;color:var(--brand);border-radius:6px;padding:1px 8px;font-size:12px;margin-right:6px}
-.sensitive{background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 8px;font-size:12px}
-button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:14px;cursor:pointer}
-button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
-button:disabled{opacity:.5;cursor:not-allowed}
+.tag{display:inline-block;background:color-mix(in srgb,var(--t-asme) 12%,transparent);color:var(--t-asme);border-radius:6px;padding:1px 8px;font-size:11.5px;margin-right:6px}
+.task .tag{background:var(--brand-soft);color:var(--brand)}
+.sensitive{background:var(--warn-soft);color:var(--warn);border-radius:6px;padding:1px 8px;font-size:11.5px}
+button{background:var(--brand);color:#0a0c0f;border:0;border-radius:9px;padding:8px 16px;font-size:13.5px;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line2);font-weight:500}
+button:disabled{opacity:.45;cursor:not-allowed}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input[type=text],input[type=password],select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:#fff}
-.result{padding:10px;border-radius:8px;margin-top:8px;font-size:13px}
-.result.ok{background:#ecfdf5;color:#065f46}.result.err{background:#fef2f2;color:#991b1b}.result.warn{background:#fffbeb;color:#92400e}
+input[type=text],input[type=password],select{border:1px solid var(--line2);border-radius:9px;padding:8px 11px;font-size:14px;background:var(--bg2);color:var(--ink);font-family:inherit}
+input:focus{outline:none;border-color:var(--brand)}
+.result{padding:10px;border-radius:9px;margin-top:8px;font-size:13px}
+.result.ok{background:var(--ok-soft);color:var(--ok)}.result.err{background:var(--bad-soft);color:var(--bad)}.result.warn{background:var(--warn-soft);color:var(--warn)}
 .hint{font-size:12px;color:var(--muted)}
-#ext-banner{display:none;background:#eef0ff;border:1px solid #c7ccf5;color:#3730a3;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
-.ext-card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff}
+a{color:var(--brand)}
+#ext-banner{display:none;background:var(--brand-soft);border:1px solid rgba(124,140,255,.35);color:var(--ink);border-radius:11px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+.ext-card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:var(--card)}
 .ext-steps{display:flex;gap:14px;margin:12px 0}
-.ext-step{flex:1;padding:10px;border:1px solid var(--line);border-radius:10px;text-align:center;font-size:13px}
-.ext-step .n{display:inline-block;width:22px;height:22px;line-height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:12px;margin-bottom:4px}
-.ext-step.cur{border-color:var(--brand);background:#f5f5ff}
-.pill.live{display:inline-flex;align-items:center;gap:6px;background:#fffbeb;color:#92400e;border-radius:999px;padding:3px 12px;font-size:12px;border:1px solid #fde68a}
-.pill.live .dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:pulse 1.2s infinite}
+.ext-step{flex:1;padding:10px;border:1px solid var(--line);border-radius:10px;text-align:center;font-size:13px;background:var(--bg2)}
+.ext-step .n{display:inline-block;width:22px;height:22px;line-height:22px;border-radius:50%;background:var(--brand);color:#0a0c0f;font-size:12px;margin-bottom:4px;font-weight:700}
+.ext-step.cur{border-color:rgba(124,140,255,.45)}
+.pill.live{display:inline-flex;align-items:center;gap:6px;background:var(--warn-soft);color:var(--warn);border-radius:999px;padding:3px 12px;font-size:12px;border:1px solid rgba(251,191,36,.3)}
+.pill.live .dot{width:8px;height:8px;border-radius:50%;background:var(--warn);animation:pulse 1.2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 </style>
 </head>

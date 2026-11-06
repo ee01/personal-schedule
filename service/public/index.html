@@ -5,55 +5,87 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Personal Schedule</title>
 <style>
-:root{--bg:#f6f7fb;--card:#fff;--ink:#1c2333;--muted:#6b7280;--line:#e5e8f0;--brand:#4f46e5;--brand-soft:#eef0ff;--ok:#059669;--ok-soft:#ecfdf5;--warn:#d97706;--warn-soft:#fffbeb;--bad:#dc2626;--bad-soft:#fef2f2}
+/* Visual language aligned with the confirmed E-182 prototype: dark base,
+   per-type accent colors, card surfaces, quiet chrome. */
+:root{
+  --bg:#0a0c0f; --bg2:#0e1116; --card:#12151a; --card2:#171b21; --line:#232932; --line2:#2c333e;
+  --ink:#e8eaed; --muted:#8b93a1; --faint:#5c6470;
+  --brand:#7c8cff; --brand-soft:rgba(124,140,255,.13);
+  --ok:#4ade80; --ok-soft:rgba(74,222,128,.13);
+  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13);
+  --bad:#f87171; --bad-soft:rgba(248,113,113,.13);
+  --t-asme:#7fe0c3; --t-bot:#76b8ff; --t-report:#f2b24c; --t-outreach:#f58d7a; --t-agent:#b9a4ff; --t-jira:#e2a4ff;
+  --radius:14px;
+}
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+html{color-scheme:dark}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(1200px 500px at 70% -10%,rgba(124,140,255,.07),transparent),var(--bg);color:var(--ink);min-height:100vh}
 a{color:var(--brand);text-decoration:none}
-.topbar{background:#fff;border-bottom:1px solid var(--line);padding:10px 20px;display:flex;gap:18px;align-items:center;position:sticky;top:0;z-index:10}
-.topbar .logo{font-weight:700;font-size:16px}
-.topbar nav a{color:var(--muted);padding:6px 10px;border-radius:8px}
-.topbar nav a.active{color:var(--brand);background:var(--brand-soft)}
+::selection{background:rgba(124,140,255,.3)}
+.topbar{background:rgba(10,12,15,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:12px 24px;display:flex;gap:20px;align-items:center;position:sticky;top:0;z-index:10}
+.topbar .logo{font-weight:700;font-size:15px;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
+.topbar .logo .dot{width:9px;height:9px;border-radius:3px;background:linear-gradient(135deg,var(--brand),var(--t-agent))}
+.topbar nav{display:flex;gap:2px}
+.topbar nav a{color:var(--muted);padding:6px 12px;border-radius:9px;cursor:pointer;font-size:13.5px;transition:.15s}
+.topbar nav a:hover{color:var(--ink);background:var(--card2)}
+.topbar nav a.active{color:var(--ink);background:var(--brand-soft)}
 .topbar .spacer{flex:1}
-.wrap{max-width:1080px;margin:24px auto;padding:0 20px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.topbar .who{color:var(--muted);font-size:12.5px}
+.wrap{max-width:1100px;margin:26px auto;padding:0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input[type=text],input[type=password],input[type=number],input[type=datetime-local],select,textarea{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:#fff;font-family:inherit}
-textarea{width:100%;min-height:70px}
-button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
-button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
-button.small{padding:4px 10px;font-size:12.5px}
-button.danger{background:var(--bad)}
-button:disabled{opacity:.5;cursor:not-allowed}
-.pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:12px}
+input[type=text],input[type=password],input[type=number],input[type=datetime-local],select,textarea{border:1px solid var(--line2);border-radius:9px;padding:8px 11px;font-size:14px;background:var(--bg2);color:var(--ink);font-family:inherit;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand)}
+textarea{width:100%;min-height:70px;resize:vertical}
+button{background:var(--brand);color:#0a0c0f;border:0;border-radius:9px;padding:8px 15px;font-size:13.5px;font-weight:600;cursor:pointer;transition:.15s}
+button:hover{filter:brightness(1.08)}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line2);font-weight:500}
+button.ghost:hover{border-color:var(--muted)}
+button.small{padding:4px 11px;font-size:12.5px}
+button.danger{background:transparent;color:var(--bad);border:1px solid rgba(248,113,113,.35);font-weight:500}
+button.danger:hover{background:var(--bad-soft)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 11px;font-size:12px;font-weight:500;white-space:nowrap}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85}
 .pill.active{background:var(--ok-soft);color:var(--ok)}
-.pill.paused{background:#f1f5f9;color:#475569}
+.pill.paused{background:rgba(139,147,161,.13);color:var(--muted)}
 .pill.inactive{background:var(--warn-soft);color:var(--warn)}
 .pill.needs_attention{background:var(--bad-soft);color:var(--bad)}
-.tag{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:6px;padding:1px 8px;font-size:12px;margin-right:6px;cursor:pointer}
+.pill.pending,.pill.leased,.pill.dispatched{background:var(--brand-soft);color:var(--brand)}
+.pill.completed,.pill.succeeded{background:var(--ok-soft);color:var(--ok)}
+.pill.failed{background:var(--bad-soft);color:var(--bad)}
+.tag{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:6px;padding:1px 8px;font-size:11.5px;margin-right:6px;cursor:pointer}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:top}
-th{color:var(--muted);font-weight:500}
-.viewtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
-.viewtabs .vt{padding:5px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);cursor:pointer;font-size:13px;color:var(--muted)}
-.viewtabs .vt.active{background:var(--brand);color:#fff;border-color:var(--brand)}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100vw);background:#fff;box-shadow:-8px 0 30px rgba(0,0,0,.08);overflow-y:auto;padding:24px;transform:translateX(100%);transition:.2s;z-index:20}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{color:var(--faint);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+.viewtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.viewtabs .vt{padding:5px 13px;border-radius:999px;background:var(--card);border:1px solid var(--line);cursor:pointer;font-size:12.5px;color:var(--muted);transition:.15s}
+.viewtabs .vt:hover{color:var(--ink);border-color:var(--line2)}
+.viewtabs .vt.active{background:var(--brand-soft);color:var(--ink);border-color:rgba(124,140,255,.4)}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(600px,100vw);background:var(--bg2);border-left:1px solid var(--line);overflow-y:auto;padding:26px;transform:translateX(100%);transition:.22s;z-index:20}
 .drawer.open{transform:none}
-.backdrop{position:fixed;inset:0;background:rgba(15,23,42,.25);display:none;z-index:15}
+.backdrop{position:fixed;inset:0;background:rgba(2,4,8,.6);backdrop-filter:blur(2px);display:none;z-index:15}
 .backdrop.show{display:block}
-h2{font-size:17px;margin:0 0 10px}
-h3{font-size:14px;margin:18px 0 6px;color:var(--muted)}
+h2{font-size:17px;margin:0 0 10px;font-weight:650}
+h3{font-size:13px;margin:20px 0 8px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
 .field{margin-bottom:12px}
-.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+.field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
 .field input,.field select{width:100%}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .muted{color:var(--muted);font-size:12.5px}
-.run{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px}
-.badge{font-size:12px;border-radius:6px;padding:1px 8px}
+.run{border:1px solid var(--line);border-radius:11px;padding:11px 13px;margin-bottom:9px;font-size:13px;background:var(--card)}
+.badge{font-size:11.5px;border-radius:6px;padding:1px 8px;font-weight:500}
 .badge.pub-published{background:var(--ok-soft);color:var(--ok)}
 .badge.pub-paused{background:var(--warn-soft);color:var(--warn)}
-.badge.pub-skipped{background:#f1f5f9;color:#64748b}
+.badge.pub-skipped{background:rgba(139,147,161,.13);color:var(--muted)}
 .badge.pub-pending{background:var(--brand-soft);color:var(--brand)}
-.badge.none{background:#f1f5f9;color:#94a3b8}
+.badge.none{background:rgba(139,147,161,.1);color:var(--faint)}
+.typeic{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;font-size:14px;flex:none}
+.trow-title{font-weight:600;font-size:14px}
+.empty{color:var(--faint);text-align:center;padding:36px 0;font-size:13px}
+.kbd{font:11px ui-monospace,monospace;background:var(--card2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--muted)}
+.notice{border:1px solid rgba(124,140,255,.3);background:var(--brand-soft);border-radius:11px;padding:10px 14px;font-size:12.5px;color:var(--ink);margin-bottom:12px}
 </style>
 </head>
 <body>
@@ -72,7 +104,7 @@ const TYPE_LABEL = { asme: '以我发送', bot: 'Bot 发送', ai_report: 'AI Rep
 
 async function boot() {
   const me = await api('/me');
-  if (me.status === 200) { S.user = me.body; render(); }
+  if (me.status === 200) { S.user = me.body; await reload(); }
   else renderLogin();
 }
 function renderLogin() {
@@ -87,7 +119,7 @@ function renderLogin() {
   </div>`;
   const go = async () => {
     const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ token: $('#tok').value.trim() }) });
-    if (r.status === 200) { S.user = r.body.user; render(); } else alert('Token 无效');
+    if (r.status === 200) { S.user = r.body.user; await reload(); } else alert('Token 无效');
   };
   $('#go').onclick = go;
   $('#tok').onkeydown = (e) => e.key === 'Enter' && go();
@@ -102,7 +134,7 @@ function render() {
   if (!S.user) return renderLogin();
   const nav = `
   <div class="topbar">
-    <span class="logo">📅 Personal Schedule</span>
+    <span class="logo"><span class="dot"></span>Personal Schedule</span>
     <nav>
       <a data-v="tasks" class="${S.view==='tasks'?'active':''}">任务</a>
       <a data-v="tags" class="${S.view==='tags'?'active':''}">标签</a>
@@ -149,11 +181,20 @@ function fmtNext(t) {
 
 function pageTasks() {
   const list = filteredTasks();
+  const TYPE_ICON = { asme:'🙋', bot:'🤖', ai_report:'📊', outreach:'💬', agent_task:'🛠', jira_automation:'⚙' };
+  const TYPE_COLOR = { asme:'var(--t-asme)', bot:'var(--t-bot)', ai_report:'var(--t-report)', outreach:'var(--t-outreach)', agent_task:'var(--t-agent)', jira_automation:'var(--t-jira)' };
   const rows = list.map((t) => `
     <tr>
-      <td><a data-open="${t.id}" style="cursor:pointer"><b>${esc(t.title)}</b></a><div class="muted">${TYPE_LABEL[t.type]||t.type} · ${esc(t.title?'':'')}</div>
-        <div>${(t.tags||[]).map((g)=>`<span class="tag">#${esc(g.name)}</span>`).join('')}</div>
-        ${t.missing?.length?`<div class="muted" style="color:var(--warn)">待补全：${t.missing.map(esc).join('、')}</div>`:''}</td>
+      <td>
+        <div style="display:flex;gap:11px;align-items:flex-start">
+          <span class="typeic" style="background:color-mix(in srgb, ${TYPE_COLOR[t.type]||'var(--brand)'} 14%, transparent);color:${TYPE_COLOR[t.type]||'var(--brand)'}">${TYPE_ICON[t.type]||'•'}</span>
+          <div style="flex:1">
+            <a data-open="${t.id}" style="cursor:pointer" class="trow-title">${esc(t.title)}</a>
+            <div class="muted" style="margin:1px 0 3px">${TYPE_LABEL[t.type]||t.type}${t.content?' · '+esc(String(t.content).slice(0,40))+(String(t.content).length>40?'…':''):''}</div>
+            <div>${(t.tags||[]).map((g)=>`<span class="tag">#${esc(g.name)}</span>`).join('')}</div>
+            ${t.missing?.length?`<div class="muted" style="color:var(--warn);margin-top:3px">待补全：${t.missing.map(esc).join('、')}</div>`:''}
+          </div>
+        </div></td>
       <td><span class="pill ${t.status}">${{active:'运行中',paused:'已暂停',inactive:'未启用',needs_attention:'需注意'}[t.status]||t.status}</span></td>
       <td>${fmtNext(t)}</td>
       <td style="white-space:nowrap">
@@ -427,7 +468,17 @@ async function openDetail(taskId) {
   document.querySelectorAll('[data-pub]').forEach((b)=>b.onclick=async()=>{const r=await api(`/runs/${b.dataset.pub}/publish`,{method:'POST',body:'{}'});if(r.status!==200)alert(r.body.error);openDetail(taskId);});
   document.querySelectorAll('[data-trial]').forEach((b)=>b.onclick=async()=>{
     const r = await api(`/tasks/${b.dataset.trial}/trial`, { method: 'POST', body: '{}' });
-    $('#trial-out').textContent = r.status===200 ? `试运行预览完成（不会真实发送）：${JSON.stringify(r.body)}` : '试运行失败';
+    if (r.status !== 200) { $('#trial-out').textContent = '试运行失败'; return; }
+    const b_ = r.body;
+    // H12 honesty: trial NEVER executes the task (no provider is invoked) —
+    // write-mode dry-run is not supported by the executors, so the preview is
+    // notification/publish-shape only and is clearly labeled as such.
+    $('#trial-out').innerHTML = [
+      `<b>试运行预览（不执行任何真实操作、不发送）</b>`,
+      b_.notifyPreview ? `通知我预览：${esc(typeof b_.notifyPreview === 'string' ? b_.notifyPreview : JSON.stringify(b_.notifyPreview))}` : '',
+      b_.publishPreview ? `发布预览：${esc(JSON.stringify(b_.publishPreview))}` : '',
+      `write 模式任务暂不支持真实执行预览（执行器无 dry-run 能力，H12）；此处仅展示通知与发布形态。`,
+    ].filter(Boolean).join('<br>');
   });
 }
 
