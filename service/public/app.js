@@ -24,7 +24,12 @@ async function refresh() {
   S.tasks = tasks.body || []; S.tags = tags.body || []; S.shares = shares.body || [];
   S.timeline = tl.body?.projects || []; S.bots = bots.body || { configured: false, bots: [] };
   S.runs = {};
-  await Promise.all(S.tasks.map(async (t) => { const r = await api(`/tasks/${t.id}/runs`); S.runs[t.id] = r.body || []; }));
+  const archived = await api('/tasks?include=archived');
+  S.archived = (archived.body || []).filter((t) => t.status === 'archived');
+  await Promise.all([
+    loadConnStatus(), // BUG-51: connection cards/dots must reflect the real state
+    ...S.tasks.map(async (t) => { const r = await api(`/tasks/${t.id}/runs`); S.runs[t.id] = r.body || []; }),
+  ]);
   S.loaded = true;
 }
 
@@ -53,6 +58,7 @@ function renderCrumb() {
   let sub = '';
   if (S.view === 'tasks') {
     if (S.sub === 'all') sub = '全部任务';
+    else if (S.sub === 'archived') sub = '已归档';
     else if (S.sub === 'ungrouped') sub = '未分组';
     else if (S.sub.startsWith('tag:')) sub = '#' + (S.tags.find((t) => t.id === S.sub.slice(4))?.name || '');
     else if (S.sub.startsWith('type:')) sub = (TYPE_LABEL[S.sub.slice(5)] || '').split(' ')[0];
@@ -82,7 +88,7 @@ function renderSidebar() {
   <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div></div>
   <button class="btn primary btn-new" id="btnNew">新建计划任务 <kbd>N</kbd></button>
   <nav>
-    <a class="nav-item ${S.view==='tasks'?'active':''}" data-nav="tasks" aria-current="${S.view==='tasks'?'page':'false'}"><span data-icon="tasks"></span>全部任务<span class="count">${countBy(()=>true)}</span></a>
+    <a class="nav-item ${S.view==='tasks'&&S.sub!=='archived'?'active':''}" data-nav="tasks" aria-current="${S.view==='tasks'?'page':'false'}"><span data-icon="tasks"></span>全部任务<span class="count">${countBy(()=>true)}</span></a>
     <a class="nav-item ${S.view==='setup'&&S.sub!=='all'?'':''} ${S.view==='setup'?'active':''}" data-nav="setup"><span data-icon="setup"></span>需要补全${need?`<span class="count warn">${need}</span>`:''}</a>
     <a class="nav-item ${S.view==='shares'?'active':''}" data-nav="shares"><span data-icon="share"></span>分享管理${sharing?`<span class="count">${sharing}</span>`:''}</a>
     <a class="nav-item ${S.view==='connections'?'active':''}" data-nav="connections"><span data-icon="plug"></span>连接与执行器</a>
@@ -101,15 +107,19 @@ function renderSidebar() {
     for (const ty of TYPE_ORDER) { const n = countBy((t)=>t.type===ty); list.push('<a class="nav-sub ' + (typePart===ty?'active':'') + '" data-nav="tasks/type:' + ty + '">' + typeIc(ty) + esc(TYPE_LABEL[ty].split(' ')[0]) + '<span class="count">' + n + '</span></a>'); }
   } else {
     list.push('<div class="nav-sub"><a data-nav="tasks/ungrouped">未分组<span class="count">' + countBy((t)=>!(t.tags||[]).length) + '</span></a></div>');
+    if (S.archived && S.archived.length) list.push('<div class="nav-sub ' + (S.sub==='archived'?'active':'') + '"><a data-nav="tasks/archived"><span data-icon="archive"></span>已归档<span class="count">' + S.archived.length + '</span></a></div>');
     for (const tag of S.tags) list.push('<div class="nav-sub ' + (tagPart===tag.id?'active':'') + '"><a data-nav="tasks/tag:' + tag.id + '"><span class="tdot" style="background:' + (tag.color||'#cdf26b') + '"></span>' + esc(tag.name) + '<span class="count">' + countBy((t)=>t.tags?.some(x=>x.id===tag.id)) + '</span></a><button class="btn ghost icon menu-trigger" data-tagmenu="' + tag.id + '" aria-label="Tag 菜单">' + ic('more') + '</button></div>');
     // BUG-09: 新建 Tag lives in the sidebar
     list.push('<button class="btn ghost sm" id="sideNewTag" style="margin:8px 4px 2px">＋ 新建 Tag</button>');
   }
   $('#tagList').innerHTML = list.join('');
   const sn = $('#sideNewTag'); if (sn) sn.onclick = (e) => { e.stopPropagation(); newTagDlg(false); };
-  // 连接状态点（N6）：Runner 常绿；memory/multica/worker 由 API 推断
+  // 连接状态点（N6/BUG-52）：只显示有真实数据源的项——Runner（服务本体）、
+  // Timeline、Bot、Memory、Multica（连接状态 API）；CLI Worker 数据源未接入，
+  // 不再伪造状态点（详情见连接页）
+  const cs = S.connStatus || {};
   const dots = [['ok','Runner'], [S.timeline.some(p=>p.configured)?'ok':'off','Timeline'],
-    [S.bots.configured?'ok':'off','Bot'], ['off','Worker']];
+    [S.bots.configured?'ok':'off','Bot'], [cs.memory?'ok':'off','Memory Service'], [cs.multica?'ok':'off','Multica']];
   $('#connDots').innerHTML = dots.map(([k,l])=>`<span class="dot ${k}" title="${l}"></span>`).join('') + `<button class="btn ghost sm" data-nav="connections">详情</button>`;
   if (S.user.isGuest && countBy(()=>true) >= 1) {
     $('#sidebar').insertAdjacentHTML('beforeend', `<div class="side-note" data-menu="id-menu">绑定后可在其他设备找回 →</div>`);
@@ -121,6 +131,8 @@ function taskSpec(t) { return typeof t.scheduleSpec === 'object' && t.scheduleSp
 // BUG-33: internal keys (chatId, connection:memory…) never surface raw
 const MISSING_L = { chatId: '收件人', 'connection:rc_user': 'RingCentral 授权', 'connection:rc_bot': 'Bot 凭据', 'connection:memory': 'Memory Service 连接', 'connection:jira': 'JIRA 连接', 'connection:multica': 'Multica 连接', source: '数据源', 'source.jql': 'JQL', 'source.url': '数据源地址', template: '报告模板', 'deliver.chatId': '投递对象', 'template.question': '问题内容', 'template.recipients': '目标收件人', content: '执行指令', 'multica.webhookUrl': 'Multica Webhook', 'multica.bindingUuid': 'Multica 绑定' };
 const missingLabel = (m) => MISSING_L[m] || m;
+// BUG-54: stable zh-CN datetime formatting (the browser locale leaked en-US)
+const fmtDT = (sec) => sec ? new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
 function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
 function specText(t) {
   const s = taskSpec(t); if (!s || !s.kind) return '';
@@ -154,6 +166,7 @@ function recipientsText(t) {
   return shown || (list.length ? '（名称未知）' : '');
 }
 function filteredTasks() {
+  if (S.sub === 'archived') return S.archived || [];
   let list = S.tasks;
   if (S.sub.startsWith('tag:')) list = list.filter((t) => (t.tags || []).some((g) => g.id === S.sub.slice(4)));
   else if (S.sub.startsWith('type:')) list = list.filter((t) => t.type === S.sub.slice(5));
@@ -164,7 +177,7 @@ function filteredTasks() {
   return list;
 }
 function rowHTML(t) {
-  const src = { glip: 'Glip', import: '分享导入', jira: 'JIRA' }[t.origin || 'web'] || '';
+  const src = { glip: 'Glip', import: '分享导入', jira: 'JIRA', local: 'Web 创建' }[t.origin || 'web'] || '';
   const rcp = recipientsText(t);
   const ev = lastRunSummary(t);
   return `<div class="trow" id="row-${t.id}" tabindex="0" role="button" data-open="${t.id}">
@@ -215,7 +228,15 @@ function pageTasks() {
     ['已完成', (t) => t.status === 'completed'],
   ];
   let body = '';
+  if (S.sub === 'archived') {
+    // BUG-46: the archive view — identity and run history preserved
+    const items = (S.archived || []).slice().sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    body = items.length
+      ? `<div class="group-h"><span>已归档</span><span class="count">${items.length}</span></div>` + items.map(rowHTML).join('')
+      : '<div class="empty"><div class="e-t">没有归档的任务</div><div class="e-s">删除的任务会先进入归档，可恢复或彻底删除。</div></div>';
+  }
   for (const [g, f] of groups) {
+    if (S.sub === 'archived') break;
     const items = list.filter(f).sort((a, b) => (a.next_run_at || 9e15) - (b.next_run_at || 9e15));
     if (!items.length) continue;
     body += `<div class="group-h"><span>${g}</span><span class="count">${items.length}</span></div>` + items.map(rowHTML).join('');
@@ -235,6 +256,23 @@ function hypotheticalNext(t) {
   if (s.kind === 'cron') return nextAtForCron(s);
   if (s.kind === 'rate') return Math.floor(Date.now() / 1000) + (s.intervalMinutes || 60) * 60;
   return null;
+}
+function nextRunsOf(t, n = 3) {
+  // BUG-53 (D4): the next n run times, same rules the server schedules with
+  const s = taskSpec(t); if (!s || !s.kind) return [];
+  const tz = s.timezone || 'Asia/Shanghai';
+  if (s.kind === 'one_shot') return s.dateTime > Math.floor(Date.now() / 1000) ? [s.dateTime] : [];
+  if (s.kind === 'timeline') { const a = nextAtForTimeline(s); return a ? [a] : []; }
+  if (s.kind === 'rate') {
+    const anchor = (t.last_run_at || Math.floor(Date.now() / 1000)) * 1000;
+    return Array.from({ length: n }, (_, i) => Math.floor((anchor + s.intervalMinutes * 60000 * (i + 1)) / 1000));
+  }
+  if (s.kind === 'cron') {
+    const out = []; let from = Date.now();
+    for (let i = 0; i < n; i += 1) { const a = nextAtForCron(s, from); if (!a) break; out.push(a); from = (a + 60) * 1000; }
+    return out;
+  }
+  return [];
 }
 function weekHTML(list) {
   const days = [];
@@ -293,7 +331,7 @@ function drawerHTML() {
   }
   function runHTML(r) {
     const res = safeParse(r.result || '{}');
-    let h = '<div class="run-item"><div class="row"><span class="mono">' + new Date(r.scheduled_for * 1000).toLocaleString() + '</span>';
+    let h = '<div class="run-item"><div class="row"><span class="mono">' + fmtDT(r.scheduled_for) + '</span>';
     h += '<span class="pill ' + (r.status || '') + '">' + esc(STATUS_L[r.status] || r.status) + '</span></div>';
     if (res.summaryForOwner) h += '<div class="muted">' + esc(res.summaryForOwner) + '</div>';
     if (r.error) h += '<div style="color:var(--err)">' + esc(typeof r.error === 'string' ? r.error : JSON.stringify(r.error)) + '</div>';
@@ -308,7 +346,7 @@ function drawerHTML() {
   return `
   <div class="drawer-b">
     <div class="dhead">${typeIc(t.type, true)}<div class="grow"><div class="row" style="gap:8px"><b>${esc(t.title)}</b><span class="pill ${t.status}">${STATUS_L[t.status]||t.status}</span></div>
-      <div class="muted">${esc(TYPE_LABEL[t.type]||t.type)} · ${{web:'Web 创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管'}[t.origin||'web']||t.origin} · rev ${t.revision||1}</div></div>
+      <div class="muted">${esc(TYPE_LABEL[t.type]||t.type)} · ${esc({web:'Web 创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管',local:'Web 创建'}[t.origin||'web']||'Web 创建')} · rev ${t.revision||1}</div></div>
       <button class="btn ghost icon" data-act="closeDrawer" aria-label="关闭">${ic('close')}</button></div>
     <div class="dtabs" role="tablist"><button role="tab" data-dtab="overview" class="${DETAIL.tab==='overview'?'on':''}">概览</button>${t.type==='outreach'?'<button role="tab" data-dtab="chain">追问链</button>':''}<button role="tab" data-dtab="runs" class="${DETAIL.tab==='runs'?'on':''}">运行记录 (${DETAIL.runs.length})</button></div>
     ${DETAIL.tab === 'overview' ? `
@@ -316,6 +354,7 @@ function drawerHTML() {
       <div class="content-box"><div class="cb-h">计划</div>
         <div class="kv"><span>规则</span><span>${esc(specText(t))}</span></div>
         ${t.next_run_at?`<div class="kv"><span>下一次运行</span><span class="mono countdown" data-at="${t.next_run_at}"></span></div>`:''}
+        ${['active','paused'].includes(t.status) && nextRunsOf(t, 3).length > 1 ? `<div class="kv"><span>后续运行</span><span class="mono" style="font-size:12px">${nextRunsOf(t, 3).slice(1).map((a) => fmtDT(a)).join('<br>')}</span></div>` : ''}
         ${s.kind==='timeline'?`<div class="kv"><span>版本信息</span><span>${esc((S.timeline.find(p=>p.id===s.project)||{}).currentRelease||'—')} · 刷新时间 ${((S.timeline.find(p=>p.id===s.project)||{}).fetchedAt? new Date(((S.timeline.find(p=>p.id===p)||{}).fetchedAt||0)*1000).toLocaleString():'—')}</span></div>`:''}
         <div class="kv"><span>时间源</span><span class="muted">Schedule Service（单一调度器）</span></div></div>
       <div class="content-box"><div class="cb-h">内容与对象</div>
@@ -324,15 +363,17 @@ function drawerHTML() {
         ${t.type==='agent_task'?`<div class="kv"><span>运行通知</span><span>${{every:'每次完成',failures:'仅失败',off:'关闭'}[t.notify?.notifyMe?.mode||'every']}</span></div><div class="kv"><span>发布产出</span><span>${t.notify?.publish?.enabled?esc(t.notify.publish.source==='template'?'按模板':'直接发送'):'关闭'}</span></div>`:''}
       </div>
       <div class="content-box"><div class="cb-h">Tag</div><div class="row">${(t.tags||[]).map((g)=>`<span class="tag" data-rmtag="${g.id}" style="--tc:${g.color}">#${esc(g.name)} ×</span>`).join('')||'<span class="muted">未分组</span>'} <button class="btn ghost sm" data-addtag>＋ 添加 Tag</button></div></div>
-      <div class="content-box"><div class="cb-h">来源</div><div class="kv"><span>创建方式</span><span>${{web:'Web 手动创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管'}[t.origin||'web']||t.origin}</span></div><div class="kv"><span>创建时间</span><span>${new Date(t.created_at*1000).toLocaleString()}</span></div></div>` : ''}
+      <div class="content-box"><div class="cb-h">来源</div><div class="kv"><span>创建方式</span><span>${{web:'Web 手动创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管',local:'Web 手动创建'}[t.origin||'web']||'Web 手动创建'}</span></div><div class="kv"><span>创建时间</span><span>${fmtDT(t.created_at)}</span></div></div>` : ''}
     ${DETAIL.tab === 'runs' ? runsHTML : ''}
     ${DETAIL.tab === 'chain' ? '<div id="chainBox">追问链加载中…</div>' : ''}
     <div class="dfoot">
-      ${t.status==='active'?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
+      ${t.status==='archived'
+        ? `<button class="btn primary" data-op="restore">恢复（暂停状态）</button><button class="btn danger ghost" data-op="purge">彻底删除</button>`
+        : `${t.status==='active'?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
       ${['paused','draft','inactive','completed'].includes(t.status)?`<button class="btn primary" data-op="enable">${t.status==='draft'?'检查并排程':'启用'} <kbd>P</kbd></button>`:''}
       <button class="btn ghost" data-op="edit">编辑 <kbd>E</kbd></button>
       <button class="btn ghost" data-op="copy">复制</button>
-      <button class="btn danger ghost" data-op="delete">删除</button>
+      <button class="btn danger ghost" data-op="delete">删除</button>`}
     </div></div>`;
 }
 function renderDrawer() {
@@ -437,6 +478,8 @@ async function tryOneLine(text) {
   }
   if (!spec) spec = { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 3600, timezone: 'Asia/Shanghai' };
   CF.oneLine = t; CF.type = type; CF.spec = spec; CF.time = timeFromSpec(spec); CF.title = t.length > 40 ? t.slice(0, 40) : t;
+  // BUG-57: keep the recognized fragments to highlight them on the confirm page
+  CF.highlights = [at ? { text: at[0], label: '时间' } : null, tag ? { text: '#' + tag[1], label: '对象' } : null, to ? { text: to[0], label: '对象' } : null].filter(Boolean);
   // BUG-05: #名称 优先按收件人解析（X1 不伪造）；解析不出时标待确认，绝不本地造 Tag
   if (tag) {
     const r = await resolveDirectory(tag[1]);
@@ -457,9 +500,14 @@ async function resolveDirectory(q) {
 }
 function cfStep2() {
   if (!CF.type) { CF.step = 1; return cfStep1(); }
+  const varChips = `<div class="row" style="gap:6px;margin-top:6px">${['date','time','datetime','weekday','title'].map((v)=>`<button class="chip" data-var="{{${v}}}">{{${v}}}</button>`).join('')}</div>
+    <div class="muted" style="margin-top:4px">变量在发送时刻按任务时区替换；点击插入到光标处。</div>`;
   const body = {
-    asme: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="要发送的内容，可插入变量">${esc(CF.content)}</textarea><div class="muted" style="margin-top:4px">支持 @对象 提及（发送时转为真实 mention）</div></div>`,
-    bot: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="Bot 要播报的内容">${esc(CF.content)}</textarea></div>`,
+    asme: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="要发送的内容，可插入变量">${esc(CF.content)}</textarea>${varChips}
+      <div class="content-box" style="margin-top:8px"><div class="cb-h">发送时预览（按当前时间规则的下一次运行替换变量）</div><div class="muted" id="varPrev" style="white-space:pre-wrap"></div></div>
+      <div class="muted" style="margin-top:4px">支持 @对象 提及（发送时转为真实 mention）</div></div>`,
+    bot: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="Bot 要播报的内容">${esc(CF.content)}</textarea>${varChips}
+      <div class="content-box" style="margin-top:8px"><div class="cb-h">发送时预览</div><div class="muted" id="varPrev" style="white-space:pre-wrap"></div></div></div>`,
     ai_report: `<div class="field"><label>JQL</label><input class="input" id="cfJql" value="${esc(CF.config?.jql||'')}"></div><div class="field"><label>空结果策略</label><div class="seg" id="cfEmpty"><button class="seg-b" data-empty="send">发送摘要</button><button class="seg-b" data-empty="silent">静默</button></div></div>`,
     outreach: `<div class="field"><label>问题</label><textarea class="input" id="cfContent" placeholder="想问对方的问题">${esc(CF.content)}</textarea></div>
       <div class="field"><label>完成标准</label><input class="input" id="cfGoal" value="${esc(CF.config?.goal||'')}"></div>
@@ -507,6 +555,14 @@ function cfStep3() {
         <div id="tplRows">${(CF.publish.template||[]).map((f,i)=>tplRow(f,i)).join('')}</div>
         <button class="btn ghost sm" id="tplAdd">＋ 添加字段</button>
         <div class="preview muted" id="tplPrev"></div></div></div></div>`;
+}
+function tplPreviewText(fields) {
+  // BUG-56: a live structural preview of the publish template
+  return (fields || []).filter((f) => f.name).map((f) => `${f.name}：${f.note || '（执行器填写）'}${f.required ? '' : '（选填）'}`).join('\n') || '还没有命名字段——模板将按执行器的自由输出发送';
+}
+function updateTplPrev() {
+  const el = $('#tplPrev'); if (!el) return;
+  el.innerHTML = esc(tplPreviewText(CF.publish.template));
 }
 function tplRow(f = { name:'', note:'', required:true }, i = 0) {
   return `<div class="row tpl-row" style="gap:8px;margin-bottom:6px"><input class="input" data-tfn="${i}" placeholder="字段名，如：标题" value="${esc(f.name)}" style="width:110px"><input class="input" data-tfn="${i}" placeholder="给执行器的说明" value="${esc(f.note)}" style="flex:1"><label class="switch-row"><span class="switch"><input type="checkbox" data-tfr="${i}" ${f.required?'checked':''}><span class="knob"></span></span>必填</label><button class="btn ghost sm" data-tfdel="${i}">删</button></div>`;
@@ -592,7 +648,25 @@ function cfStep5() {
     ['规则', spec ? specText({ scheduleSpec: spec }) || '待确认' : '待确认'],
     ['时区', (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai'],
   ];
-  return `${rows.some(([,v])=>v==='待确认') ? '<div class="alert warn">以下项还需要确认：' + rows.filter(r=>r[1]==='待确认').map(r=>r[0]).join('、') + '</div>' : ''}
+  const hlHTML = (() => {
+    // BUG-57: show WHAT the one-sentence parser recognized, highlighted
+    if (!CF.oneLine || !CF.highlights || !CF.highlights.length) return '';
+    let txt = CF.oneLine;
+    const marks = [];
+    for (const h of [...CF.highlights].sort((a, b) => b.text.length - a.text.length)) {
+      const i = txt.indexOf(h.text);
+      if (i === -1) continue;
+      marks.push({ start: i, end: i + h.text.length, label: h.label, text: h.text });
+      txt = txt.slice(0, i) + '\u0001'.repeat(h.text.length) + txt.slice(i + h.text.length);
+    }
+    if (!marks.length) return '';
+    marks.sort((a, b) => a.start - b.start);
+    let out = ''; let pos = 0;
+    for (const m of marks) { out += esc(CF.oneLine.slice(pos, m.start)) + `<mark class="hl" title="${esc(m.label)}">${esc(m.text)}</mark>`; pos = m.end; }
+    out += esc(CF.oneLine.slice(pos));
+    return `<div class="content-box"><div class="cb-h">一句话识别</div><div>${out}<div class="muted" style="margin-top:4px">${CF.highlights.map((h) => esc(h.label)).join(' · ')} 已识别，未识别的部分保留在标题/内容中。</div></div></div>`;
+  })();
+  return `${hlHTML}${rows.some(([,v])=>v==='待确认') ? '<div class="alert warn">以下项还需要确认：' + rows.filter(r=>r[1]==='待确认').map(r=>r[0]).join('、') + '</div>' : ''}
     ${unres.length ? '<div class="alert warn">有未解析的收件人（原文已保留：' + unres.map((r) => esc(r.raw || r.name)).join('、') + '）——到「对象」步骤选择真实对象后才能保存。</div>' : ''}
     <div class="content-box">${rows.map(([k,v])=>`<div class="kv"><span>${k}</span><span>${esc(v)} <button class="btn ghost sm" data-fix="${k}">修改</button></span></div>`).join('')}</div>
     <div class="content-box"><div class="cb-h">Tag</div><div class="row">${S.tags.map((g)=>`<label class="check"><input type="checkbox" data-cftag="${g.id}" ${CF.tags.includes(g.id)?'checked':''}> #${esc(g.name)}</label>`).join('')||'<span class="muted">还没有 Tag</span>'} <button class="btn ghost sm" data-newtag-cf>＋ 新建</button></div></div>
@@ -607,11 +681,18 @@ function cfStep5() {
 function pageSetup() {
   const items = S.tasks.filter((t) => t.status === 'inactive' || (t.missing && t.missing.length));
   const ready = items.filter((t) => !(t.missing || []).length).length;
+  // BUG-50: an actionable control per missing item — jumps straight to the
+  // place where the gap can be fixed in place
+  const fixAction = (m, task) => {
+    if (m.startsWith('connection:')) return '<button class="btn ghost sm" data-nav="connections">去连接</button>';
+    if (['chatId','deliver.chatId','template.recipients'].includes(m)) return `<button class="btn ghost sm" data-fixstep="${task.id}:3">去补全对象</button>`;
+    return `<button class="btn ghost sm" data-fixstep="${task.id}:2">去补全内容</button>`;
+  };
   const card = (t) => {
     const miss = t.missing || []; const done = miss.length === 0;
-    return `<div class="content-box setup-card"><label class="check"><input type="checkbox" ${done?'checked disabled':''}><span>${typeIc(t.type)}<b>${esc(t.title)}</b><span class="pill ${done?'ok':'warn'}">${done?'可启用':'x/y 待补全'}</span></span></label>
-      <div class="muted">${esc(specText(t))} · ${{web:'Web 创建',glip:'Glip',import:'分享导入',jira:'JIRA'}[t.origin||'web']||t.origin}</div>
-      ${done ? `<button class="btn primary sm" data-enable="${t.id}">启用</button>` : `<div class="setup-items">${miss.map((m)=>`<span class="chip">${esc(missingLabel(m))}</span>`).join('')}</div>`}</div>`;
+    return `<div class="content-box setup-card"><label class="check"><input type="checkbox" ${done?'checked disabled':''}><span>${typeIc(t.type)}<b>${esc(t.title)}</b><span class="pill ${done?'ok':'warn'}">${done?'可启用':miss.length+' 项待补全'}</span></span></label>
+      <div class="muted">${esc(specText(t))} · ${{web:'Web 创建',glip:'Glip',import:'分享导入',jira:'JIRA',local:'Web 创建'}[t.origin||'web']||'Web 创建'}</div>
+      ${done ? `<button class="btn primary sm" data-enable="${t.id}">启用</button>` : `<div class="setup-items">${miss.map((m)=>`<span class="chip">${esc(missingLabel(m))}</span>${fixAction(m, t)}`).join('')}</div>`}</div>`;
   };
   $('#view').innerHTML = `<div class="page-h"><h2>需要补全</h2><span class="muted">未绑定邮箱/扩展不算缺项——单设备模式可以使用全部功能；缺项只包括执行真正需要的连接。</span></div>
     <div class="setup-progress"><span class="mono">${ready} / ${items.length} 已就绪</span><button class="btn primary sm" id="setupAll" ${ready?'':'disabled'}>启用所选</button></div>
@@ -626,7 +707,12 @@ function pageConnections() {
     card('Memory Service', !!getConnCache('memory'), connStatus('memory'), connForm('memory')) +
     card('Multica', !!getConnCache('multica'), connForm('multica')) +
     card('Timeline 数据源', S.timeline.some((p) => p.configured && !p.stale), `<div class="muted">${S.timeline.filter((p)=>p.configured).length}/${S.timeline.length} 个项目有数据</div>`,
-      `<div class="row" style="gap:6px;margin-top:8px"><button class="btn ghost sm" id="tlRefresh">全部刷新</button><span class="muted" id="tlNote"></span></div>`) +
+      // BUG-58: per-project status — current release, refresh time, tasks in use
+      `<div style="margin-top:8px">${S.timeline.map((p) => {
+        const inUse = countBy((t) => { const sp = taskSpec(t); return sp && sp.kind === 'timeline' && sp.project === p.id && t.status !== 'archived'; });
+        return `<div class="kv" style="padding:3px 0"><span>${esc(p.name)}</span><span class="muted" style="font-size:12px">${p.currentRelease ? esc(p.currentRelease) + ' · ' + fmtDT(p.fetchedAt) : '暂无数据'} · ${inUse} 个任务在用</span></div>`;
+      }).join('')}</div>
+      <div class="row" style="gap:6px;margin-top:8px"><button class="btn ghost sm" id="tlRefresh">全部刷新</button><span class="muted" id="tlNote"></span></div>`) +
     card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc(S.user.email)}</div>`, tokenMgmtHtml());
 }
 function getConnCache(k) { return (S.connStatus || {})[k] !== undefined ? S.connStatus[k] : null; }
@@ -646,7 +732,7 @@ function pageShares() {
     let h = '<div class="content-box"><div class="row"><span class="tdot" style="background:' + esc(s.color || '#cdf26b') + '"></span><b>#' + esc(s.sourceTagName) + '</b>';
     h += '<span class="pill ' + (s.revoked ? '' : 'ok') + '">' + (s.revoked ? '已撤销' : '分享中') + '</span><span class="spacer"></span></div>';
     h += '<div class="mono muted" style="margin:6px 0">/share/' + esc(s.token) + ' <button class="btn ghost sm" data-copy="' + s.token + '">复制链接</button></div>';
-    h += '<div class="muted">' + (s.revoked ? '撤销于 ' + new Date((s.revokedAt || 0) * 1000).toLocaleString() : '实时视图 · ' + (s.liveCount || 0) + ' 个任务 · ' + (s.importCount || 0) + ' 人导入过') + '</div>';
+    h += '<div class="muted">' + (s.revoked ? '撤销于 ' + fmtDT(s.revokedAt || 0) : '实时视图 · ' + (s.liveCount || 0) + ' 个任务 · ' + (s.importCount || 0) + ' 人导入过') + '</div>';
     h += '<div class="row" style="margin-top:6px">';
     h += s.revoked
       ? '<button class="btn ghost sm" data-reshare="' + s.tagId + '">重新分享</button>'
@@ -773,7 +859,11 @@ function wire() {
         if (arg === 'rename') return tagDlg(tag);
         if (arg === 'merge') return mergeTagDlg(tag);
         if (arg === 'delete') return confirmDlg({ title: '删除 Tag', body: '删除 Tag 不删除任务。确定删除「' + esc(tag.name) + '」吗？', ok: '删除', danger: true,
-          onOk: async () => { await api('/tags/' + tagId, { method: 'DELETE' }); await refresh(); render(); toast('已删除 Tag「' + tag.name + '」', { undo: async () => { location.hash = '#/tasks/all'; location.reload(); } }); return true; } });
+          // BUG-47: undo restores the SAME tag id with its task links intact
+          onOk: async () => { await api('/tags/' + tagId, { method: 'DELETE' }); await refresh(); render(); toast('已删除 Tag「' + tag.name + '」', { undo: async () => {
+            const rr = await api('/tags/' + tagId + '/restore', { method: 'POST', body: '{}' });
+            if (rr.status === 200) { await refresh(); render(); toast('已恢复 Tag「' + tag.name + '」', { kind: 'ok' }); }
+          }, stay: 12000 }); return true; } });
       });
   });
   $$('#listSeg .seg-b').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
@@ -806,6 +896,9 @@ function wireDrawer() {
     openDrawer(DETAIL.task.id);
   });
 }
+const recipsFrom = (t) => t.config?.recipients?.length ? t.config.recipients
+  : (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }]
+  : (t.config?.pendingRecipient ? [{ raw: t.config.pendingRecipient, unresolved: true }] : []));
 async function drawerAction(id, op) {
   if (op === 'pause') {
     // BUG-17: pause with undo, no full reload
@@ -818,12 +911,9 @@ async function drawerAction(id, op) {
     if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).map((m) => missingLabel(m)).join('、'), { kind: 'err', stay: 8000 });
     else { await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); toast('已启用', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); await refresh(); render(); } }); }
     return; }
-  const recipsFrom = (t) => t.config?.recipients?.length ? t.config.recipients
-    : (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }]
-    : (t.config?.pendingRecipient ? [{ raw: t.config.pendingRecipient, unresolved: true }] : []));
   if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
     // BUG-21: editing starts at the content step — the type is already known
-    CF.step = 2; renderModal(); return; }
+    CF.prevRevision = t.revision || 1; CF.step = 2; renderModal(); return; }
   if (op === 'copy') {
     const t = DETAIL.task; const sp = taskSpec(t);
     newFlow(t.type, { title: t.title + '（副本）', content: t.content, spec: sp,
@@ -833,8 +923,27 @@ async function drawerAction(id, op) {
       tags: (t.tags || []).map((g) => g.id) });
     CF.step = 5; renderModal(); return;
   }
-  if (op === 'delete') return confirmDlg({ title: '删除计划任务', body: '删除后进入归档，可从归档恢复。确定删除这条任务吗？', ok: '删除', danger: true,
-    onOk: async () => { await api(`/tasks/${id}`, { method: 'DELETE' }); toast('已删除', { undo: () => location.reload() }); setTimeout(() => location.reload(), 400); return true; } });
+  if (op === 'delete') return confirmDlg({ title: '删除计划任务', body: '删除后进入归档（保留任务身份与执行记录），可随时从归档恢复。确定吗？', ok: '删除', danger: true,
+    // BUG-46: delete archives; undo restores the SAME identity + runs
+    onOk: async () => {
+      const r = await api(`/tasks/${id}`, { method: 'DELETE' });
+      if (r.status !== 200) { toast('删除失败：' + (r.body.error || r.status), { kind: 'err' }); return false; }
+      await refresh(); render(); closeDrawer();
+      toast('已归档（可从归档恢复）', { undo: async () => {
+        const rr = await api(`/tasks/${id}/restore`, { method: 'POST', body: '{}' });
+        if (rr.status === 200) { await refresh(); render(); toast('已恢复（当前为暂停状态，启用后才会执行）', { kind: 'ok' }); }
+        else toast('恢复失败：' + (rr.body.error || rr.status), { kind: 'err' });
+      }, stay: 12000 });
+      return true;
+    } });
+  if (op === 'restore') { // archived → back (paused, never auto-executing)
+    const r = await api(`/tasks/${id}/restore`, { method: 'POST', body: '{}' });
+    if (r.status !== 200) return toast('恢复失败：' + (r.body.error || r.status), { kind: 'err' });
+    await refresh(); render(); closeDrawer(); toast('已恢复（当前为暂停状态，启用后才会执行）', { kind: 'ok' });
+    return;
+  }
+  if (op === 'purge') return confirmDlg({ title: '彻底删除', body: '彻底删除不可恢复，将清除该任务及其全部执行记录。确定？', ok: '彻底删除', danger: true,
+    onOk: async () => { await api(`/tasks/${id}`, { method: 'DELETE' }); await refresh(); render(); closeDrawer(); toast('已彻底删除'); return true; } });
 }
 async function toggleTag(taskId, tagId, add) {
   const t = S.tasks.find((x) => x.id === taskId);
@@ -929,7 +1038,17 @@ function wireCfPane() {
   // BUG-21: step-rail buttons sit outside #cfPane — bind at modalLayer scope
   $$('#modalLayer .steps [data-step]').forEach((b) => b.onclick = () => { CF.step = +b.dataset.step; renderModal(); });
   const title = $('#cfTitle'); if (title) title.oninput = (e) => CF.title = e.target.value;
-  const content = $('#cfContent'); if (content) content.oninput = (e) => CF.content = e.target.value;
+  const content = $('#cfContent'); if (content) content.oninput = (e) => { CF.content = e.target.value; updateVarPreview(); };
+  // BUG-55: insert variable chips at the caret
+  $$('#cfPane [data-var]').forEach((c) => c.onclick = () => {
+    if (!content) return;
+    const v = c.dataset.var;
+    const st = content.selectionStart ?? content.value.length;
+    content.value = content.value.slice(0, st) + v + content.value.slice(content.selectionEnd ?? st);
+    CF.content = content.value; content.focus(); content.setSelectionRange(st + v.length, st + v.length);
+    updateVarPreview();
+  });
+  updateVarPreview();
   $$('#cfPane [data-mode]').forEach((b) => b.onclick = () => { CF.mode = b.dataset.mode; renderModal(); });
   $$('#cfPane [data-demo]').forEach((c) => c.onclick = () => tryOneLine(c.dataset.demo));
   // chips 输入（X1）
@@ -954,8 +1073,15 @@ function wireCfPane() {
     const presets = { '查询简报': [{ name: '标题', note: '一句话标题', required: true }, { name: '结论', note: '', required: true }, { name: '风险', note: '风险点', required: true }], '漏洞通报': [{ name: '漏洞', note: '编号与标题', required: true }, { name: '风险等级', required: true }, { name: '下一步', note: '', required: true }] };
     CF.publish.template = presets[b.dataset.tpl] || []; renderModal(); });
   const ta = $('#tplAdd'); if (ta) ta.onclick = () => { CF.publish.template.push({ name: '', note: '', required: true }); renderCfPane(); };
-  $$('#cfPane [data-tfdel]').forEach((b) => b.onclick = () => { CF.publish.template.splice(+b.dataset.tfdel, 1); renderCfPane(); });
-  $$('#cfPane [data-tfn]').forEach((i2) => i2.oninput = (e) => { CF.publish.template[+e.target.dataset.tfn][e.target.className.includes('tpl-note')?'note':'name'] = e.target.value; });
+  // BUG-56: deleting a field is undoable and the preview updates live
+  $$('#cfPane [data-tfdel]').forEach((b) => b.onclick = () => {
+    const idx = +b.dataset.tfdel;
+    const removed = CF.publish.template.splice(idx, 1)[0];
+    renderCfPane();
+    if (removed) toast(`已删除字段「${removed.name || '未命名'}」`, { undo: () => { CF.publish.template.splice(Math.min(idx, CF.publish.template.length), 0, removed); renderCfPane(); }, stay: 10000 });
+  });
+  updateTplPrev();
+  $$('#cfPane [data-tfn]').forEach((i2) => i2.oninput = (e) => { CF.publish.template[+e.target.dataset.tfn][e.target.className.includes('tpl-note')?'note':'name'] = e.target.value; updateTplPrev(); });
   $$('#cfPane [data-tfr]').forEach((i2) => i2.onchange = (e) => { CF.publish.template[+e.target.dataset.tfr].required = e.target.checked; });
   // 时间步骤（X2）
   wireTimeStep();
@@ -987,6 +1113,21 @@ function wireChips(inputId, boxId, pickerId, target) {
     if (e.key === 'Backspace' && !input.value && arr.length) { arr.pop(); renderCfPane(); }
   };
   input.dispatchEvent(new Event('input'));
+}
+function updateVarPreview() {
+  const el = $('#varPrev'); if (!el) return;
+  const sp = currentSpec();
+  let at = Math.floor(Date.now() / 1000) + 3600;
+  if (sp) {
+    if (sp.kind === 'one_shot') at = sp.dateTime || at;
+    else if (sp.kind === 'cron') at = nextAtForCron(sp) || at;
+    else if (sp.kind === 'timeline') at = nextAtForTimeline(sp) || at;
+  }
+  const tz = (sp && sp.timezone) || 'Asia/Shanghai';
+  const d = new Date(at * 1000);
+  const fmt = (o) => new Intl.DateTimeFormat('zh-CN', { timeZone: tz, hour12: false, ...o }).format(d);
+  const vars = { date: fmt({ year: 'numeric', month: '2-digit', day: '2-digit' }), time: fmt({ hour: '2-digit', minute: '2-digit' }), datetime: fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), weekday: fmt({ weekday: 'long' }), title: CF.title || '' };
+  el.innerHTML = esc(String(CF.content || '（内容为空）').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] !== undefined ? vars[k] : m)) + ` <div style="margin-top:4px">· 按下一次运行 ${fmtDT(at)}（${tzLabel(tz)}）替换</div>`;
 }
 function wireTimeStep() {
   const seg = $('#freqSeg'); if (!seg) return;
@@ -1024,7 +1165,10 @@ function previewNext() {
   const el = $('#cfNextPrev'); if (!el) return;
   const s = currentSpec();
   if (!s) { el.innerHTML = '时间规则还不完整——选择频率并填好时刻/日期后这里会显示下一次运行'; return; }
-  el.innerHTML = '下一次运行：' + fmtNext(s.dateTime || nextAtForCron(s)) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
+  // BUG-45: timeline specs preview by the milestone rule, not cron defaults
+  const next = s.kind === 'timeline' ? nextAtForTimeline(s) : (s.dateTime || nextAtForCron(s));
+  if (!next) { el.innerHTML = '下一次运行：等待里程碑日期（数据源还没有该里程碑的日期）'; return; }
+  el.innerHTML = '下一次运行：' + fmtNext(next) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
 }
 function wallInTz(tz, epochMs) {
   // wall-clock fields of an instant, read in the spec's timezone
@@ -1039,7 +1183,29 @@ function epochFromWall(tz, wall) {
   const offset = Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi) - asUTC;
   return Math.floor((asUTC - offset) / 1000);
 }
-function nextAtForCron(s) {
+function nextAtForTimeline(s) {
+  // BUG-45: mirrors the server's computeTargetInstant — earliest FUTURE
+  // candidate of the milestone (explicit releaseName wins), date+offsetDays
+  // at spec.time in the spec timezone; the preview and the scheduler agree
+  const proj = S.timeline.find((p) => p.id === s.project);
+  if (!proj) return null;
+  const releases = proj.releases || (proj.currentRelease ? [{ release: proj.currentRelease, milestones: proj.milestones || [] }] : []);
+  const pool = s.releaseName ? releases.filter((e) => e.release === s.releaseName) : releases;
+  const candidates = [];
+  for (const entry of pool) for (const m of (entry.milestones || [])) if (m.name === s.milestone) candidates.push({ date: m.date });
+  if (!candidates.length) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const future = candidates.filter((c) => c.date >= today).sort((a, b) => (a.date < b.date ? -1 : 1));
+  const chosen = future[0] || candidates.sort((a, b) => (a.date < b.date ? -1 : 1)).at(-1);
+  if (!chosen.date) return null;
+  const [y, mo, d] = chosen.date.split('-').map(Number);
+  if (!y || !mo || !d) return null;
+  const off = Number(s.offsetDays) || 0;
+  const base = new Date(Date.UTC(y, mo - 1, d + off));
+  const [hh, mi] = String(s.time || '09:00').split(':').map(Number);
+  return epochFromWall(s.timezone || 'Asia/Shanghai', { y: base.getUTCFullYear(), mo: base.getUTCMonth() + 1, d: base.getUTCDate(), h: hh || 0, mi: mi || 0 });
+}
+function nextAtForCron(s, fromArg) {
   // BUG-03: next firing of a cron spec computed in the SPEC's timezone, same
   // rule the server schedules with; monthly (dom) matches can be up to a
   // year away, so scan 400 days instead of 8 (the old preview showed "—"
@@ -1053,10 +1219,11 @@ function nextAtForCron(s) {
     if (tok.includes('-')) { const [a, b] = tok.split('-').map(Number); return Array.from({ length: b - a + 1 }, (_, i2) => a + i2); }
     return [Number(tok)];
   }) : null;
-  const nowSec = Math.floor(Date.now() / 1000);
+  const fromMs = fromArg || Date.now();
+  const nowSec = Math.floor(fromMs / 1000);
   const limit = dom ? 400 : 8;
   for (let i = 0; i <= limit; i += 1) {
-    const probe = Date.now() + i * 864e5;
+    const probe = fromMs + i * 864e5;
     const w = wallInTz(tz, probe);
     if (dom && w.d !== dom) continue;
     if (dows && !dows.includes(new Date(Date.UTC(w.y, w.mo - 1, w.d)).getUTCDay())) continue;
@@ -1184,6 +1351,14 @@ function wireSharePage() {
   $$('#modalLayer [data-act="closeSf"]').forEach((b) => b.onclick = () => { SF = null; renderModal(); });
 }
 function wireSetup() {
+  $$('#view [data-fixstep]').forEach((b) => b.onclick = async () => {
+    // BUG-50: open the task editor straight at the step that owns the gap
+    const [id, step] = b.dataset.fixstep.split(':');
+    await openDrawer(id);
+    const t = DETAIL.task;
+    newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
+    CF.step = +step; renderModal();
+  });
   $$('#view [data-enable]').forEach((b) => b.onclick = async () => { const r = await api(`/tasks/${b.dataset.enable}/status`, { method: 'POST', body: { status: 'active' } }); toast(r.status === 200 ? '已启用' : '无法启用：' + (r.body.error || ''), { kind: r.status === 200 ? 'ok' : 'err' }); location.reload(); });
   const all = $('#setupAll'); if (all) all.onclick = () => toast('启用所选：按卡片的启用按钮逐个启用', { kind: 'info' });
   const tl = $('#tlRefresh'); if (tl) tl.onclick = async () => { tl.textContent = '刷新中…'; const r = await api('/timeline/refresh', { method: 'POST', body: '{}' }); $('#tlNote').textContent = r.body.ok ? '已刷新' : '失败'; await refresh(); render(); };
@@ -1295,8 +1470,12 @@ function wireCfFooter(){
       await refresh();
       const saved = S.tasks.find((x) => x.id === id) || {};
       if (editing) {
+        // BUG-57: a spec/content change bumps the revision — say so.
+        // Capture before closeCf() nulls CF.
+        const prevRevision = CF.prevRevision || 0;
         closeCf(); render();
-        toast('已保存修改');
+        const after = S.tasks.find((x) => x.id === id) || {};
+        toast(after.revision && after.revision > prevRevision ? `已保存修改（revision 增至 ${after.revision}）` : '已保存修改');
         highlightRow(id);
         return;
       }

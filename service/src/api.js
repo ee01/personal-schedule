@@ -297,7 +297,7 @@ function describeRole(type, cfg) {
   // ------------------------------------------------------------ tags
   app.get('/api/v1/tags', (req) => {
     const user = requireUser(db, auth, req);
-    const tags = db.prepare('SELECT * FROM tags WHERE user_id = ? ORDER BY sort_order, name').all(user.id);
+    const tags = db.prepare('SELECT * FROM tags WHERE user_id = ? AND deleted_at IS NULL ORDER BY sort_order, name').all(user.id);
     const counts = Object.fromEntries(
       db
         .prepare(
@@ -313,7 +313,7 @@ function describeRole(type, cfg) {
     const user = requireUser(db, auth, req);
     const { name, color, sortOrder } = req.body;
     if (!name || typeof name !== 'string') throw badRequest('name required');
-    const existing = db.prepare('SELECT * FROM tags WHERE user_id = ? AND name = ?').get(user.id, name.trim());
+    const existing = db.prepare('SELECT * FROM tags WHERE user_id = ? AND name = ? AND deleted_at IS NULL').get(user.id, name.trim());
     if (existing) return existing;
     const id = newId('tag');
     db.prepare('INSERT INTO tags (id, user_id, name, color, sort_order, created_at) VALUES (?,?,?,?,?,?)').run(
@@ -339,9 +339,20 @@ function describeRole(type, cfg) {
     const tag = db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
     if (!tag) throw notFound();
     if (tag.user_id !== user.id) throw forbidden();
-    db.prepare('DELETE FROM task_tags WHERE tag_id = ?').run(tag.id); // tasks survive
-    db.prepare('DELETE FROM tags WHERE id = ?').run(tag.id);
+    // BUG-47: soft delete — task links survive so 撤销 restores the exact
+    // same Tag identity (same id, same task associations)
+    db.prepare('UPDATE tags SET deleted_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), tag.id);
     return { ok: true };
+  });
+
+  app.post('/api/v1/tags/{id}/restore', (req) => {
+    const user = requireUser(db, auth, req);
+    const tag = db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
+    if (!tag) throw notFound();
+    if (tag.user_id !== user.id) throw forbidden();
+    if (!tag.deleted_at) throw badRequest('tag is not deleted');
+    db.prepare('UPDATE tags SET deleted_at = NULL WHERE id = ?').run(tag.id);
+    return db.prepare('SELECT * FROM tags WHERE id = ?').get(tag.id);
   });
 
   // ------------------------------------------------------------ tasks
@@ -379,8 +390,19 @@ function describeRole(type, cfg) {
 
   app.delete('/api/v1/tasks/{id}', (req) => {
     const user = requireUser(db, auth, req);
-    store.deleteTask(user.id, req.params.id);
-    return { ok: true };
+    // BUG-46: first delete archives (undo/restore keeps identity + runs);
+    // deleting an already archived task purges it for real
+    const result = store.deleteTask(user.id, req.params.id);
+    return { ok: true, ...result };
+  });
+
+  app.post('/api/v1/tasks/{id}/restore', (req) => {
+    const user = requireUser(db, auth, req);
+    // BUG-46: restore keeps the original task id and all run records; the
+    // task comes back non-executing (paused/inactive), never active
+    const task = store.restoreTask(user.id, req.params.id);
+    schedulePreview(task.id);
+    return { task };
   });
 
   app.post('/api/v1/tasks/{id}/status', (req) => {
@@ -740,9 +762,16 @@ function describeRole(type, cfg) {
 
   // ------------------------------------------------------------ settings
   app.get('/api/v1/settings', (req) => {
-    requireUser(db, auth, req);
+    const user = requireUser(db, auth, req);
     const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'timeline.%'").all();
-    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const out = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    // security boundary: deployment-level config (the internal release-info
+    // URL) is not exposed to unbound guest identities — they can still use
+    // the timeline data itself via /timeline/projects
+    if (user.is_guest === 1 && out['timeline.sourceUrl'] !== undefined) {
+      out['timeline.sourceUrl'] = '(bound accounts only)';
+    }
+    return out;
   });
 
   app.put('/api/v1/settings/{key}', (req) => {
@@ -824,6 +853,14 @@ function describeRole(type, cfg) {
 
   app.post('/api/v1/timeline/refresh', async (req) => {
     requireUser(db, auth, req);
+    // security boundary: the refresh is deployment-wide (it fans out to the
+    // release-info source for every project) — a small cooldown bounds abuse
+    // from any identity without blocking normal use
+    const cooldownSec = 60;
+    const last = Number(db.prepare("SELECT value FROM settings WHERE key = 'timeline.lastRefreshAt'").get()?.value) || 0;
+    const now = Math.floor(Date.now() / 1000);
+    if (now - last < cooldownSec) throw badRequest(`刷新过于频繁——请在 ${cooldownSec - (now - last)} 秒后重试`);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('timeline.lastRefreshAt', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(now));
     const project = req.body?.project;
     if (project) {
       const result = await timeline.refreshProject(project);

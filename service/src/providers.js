@@ -139,17 +139,35 @@ export async function rcBotsList(connection) {
 
 // ---------------------------------------------------------------- providers
 
+// BUG-55 (C4): message-content variables, substituted at DISPATCH time in
+// the task's own timezone so the sent text matches what the editor
+// previewed. Unknown variables are left verbatim (visible, not swallowed).
+export function renderContentVars(task, occurrence) {
+  const tz = (task.scheduleSpec && task.scheduleSpec.timezone) || task.timezone || 'Asia/Shanghai';
+  const at = new Date((occurrence?.scheduled_for || Math.floor(Date.now() / 1000)) * 1000);
+  const fmt = (opts) => new Intl.DateTimeFormat('zh-CN', { timeZone: tz, hour12: false, ...opts }).format(at);
+  const vars = {
+    date: fmt({ year: 'numeric', month: '2-digit', day: '2-digit' }),
+    time: fmt({ hour: '2-digit', minute: '2-digit' }),
+    datetime: fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+    weekday: fmt({ weekday: 'long' }),
+    title: task.title || '',
+  };
+  return String(task.content ?? '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (vars[key] !== undefined ? vars[key] : m));
+}
+
 export const providers = {
   asme: {
     idempotent: false,
     async run({ task, occurrence, connections }) {
       const conn = connections.rc_user;
       if (!conn) throw new HttpError(424, 'rc_user connection not configured');
-      const post = await rcPostMessage(conn, 'user', { chatId: task.config.chatId, text: task.content });
+      const rendered = renderContentVars(task, occurrence);
+      const post = await rcPostMessage(conn, 'user', { chatId: task.config.chatId, text: rendered });
       return {
         status: 'succeeded',
         summaryForOwner: `已按计划以我的身份发送到会话 ${task.config.chatId}`,
-        finalOutput: task.content,
+        finalOutput: rendered,
         evidence: { chatId: post.chatId || task.config.chatId, postId: post.id },
       };
     },
@@ -159,11 +177,12 @@ export const providers = {
     async run({ task, occurrence, connections }) {
       const conn = connections.rc_bot;
       if (!conn) throw new HttpError(424, 'rc_bot connection not configured');
-      const post = await rcPostMessage(conn, 'bot', { chatId: task.config.chatId, text: task.content });
+      const rendered = renderContentVars(task, occurrence);
+      const post = await rcPostMessage(conn, 'bot', { chatId: task.config.chatId, text: rendered });
       return {
         status: 'succeeded',
         summaryForOwner: `已按计划以 Bot 身份发送到会话 ${task.config.chatId}`,
-        finalOutput: task.content,
+        finalOutput: rendered,
         evidence: { chatId: post.chatId || task.config.chatId, postId: post.id },
       };
     },

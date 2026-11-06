@@ -269,3 +269,68 @@ test('plain PATCH edit keeps an incomplete draft a draft (帮我做 without Memo
   assert.equal(edited.status, 'draft', 'missing Memory must not demote a draft to inactive');
   assert.ok(edited.missing.includes('connection:memory'));
 });
+
+
+// BUG-46 (D9): delete archives; restore keeps identity + runs, never auto-executes
+test('delete archives the task; restore returns it as paused with runs intact', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx, { status: 'active' });
+  const first = ctx.store.deleteTask(ctx.user.id, task.id);
+  assert.deepEqual(first, { archived: true, purged: false });
+  const archived = ctx.store.getUserTask(ctx.user.id, task.id);
+  assert.equal(archived.status, 'archived');
+  assert.equal(archived.next_run_at, null);
+  const restored = ctx.store.restoreTask(ctx.user.id, task.id);
+  assert.equal(restored.id, task.id, 'identity preserved');
+  // an incomplete setup restores to inactive; a complete one to paused —
+  // the invariant is NEVER active (no auto-execution after restore)
+  assert.ok(['paused', 'inactive'].includes(restored.status), `never active (got ${restored.status})`);
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)').run(
+    ctx.user.id, 'rc_user', JSON.stringify({ token: 'x', ownChatId: 'me' }), nowSec(),
+  );
+  const again = (() => { ctx.store.deleteTask(ctx.user.id, task.id); return ctx.store.restoreTask(ctx.user.id, task.id); })();
+  assert.equal(again.status, 'paused', 'complete setup restores to paused');
+  // second delete purges for real
+  ctx.store.deleteTask(ctx.user.id, task.id); // archives again
+  const purged = ctx.store.deleteTask(ctx.user.id, task.id);
+  assert.deepEqual(purged, { archived: false, purged: true });
+  assert.throws(() => ctx.store.getUserTask(ctx.user.id, task.id), /not found/);
+});
+
+test('listTasks hides archived tasks unless include=archived', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx, { status: 'active' });
+  ctx.store.deleteTask(ctx.user.id, task.id);
+  assert.equal(ctx.store.listTasks(ctx.user.id, {}).length, 0);
+  assert.equal(ctx.store.listTasks(ctx.user.id, { include: 'archived' }).length, 1);
+});
+
+// BUG-47 (N5): tag soft delete + restore keeps identity and task links
+test('tag soft delete keeps the row and task links; clearing deleted_at restores the identity', () => {
+  const ctx = fresh();
+  ctx.db.prepare("INSERT INTO tags (id, user_id, name, color, created_at) VALUES ('tag_x', ?, 'X', '#fff', 0)").run(ctx.user.id);
+  const { task } = insertTask(ctx, { status: 'active' });
+  ctx.store.setTaskTags(ctx.user.id, task.id, ['tag_x']);
+  // soft delete (what the route now does)
+  ctx.db.prepare('UPDATE tags SET deleted_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000), 'tag_x');
+  const listed = ctx.db.prepare('SELECT * FROM tags WHERE user_id = ? AND deleted_at IS NULL').all(ctx.user.id);
+  assert.equal(listed.filter((t) => t.id === 'tag_x').length, 0, 'deleted tag hidden from lists');
+  // restore (what POST /tags/:id/restore does) — same id, links intact
+  ctx.db.prepare('UPDATE tags SET deleted_at = NULL WHERE id = ?').run('tag_x');
+  const links = ctx.db.prepare('SELECT COUNT(*) AS n FROM task_tags WHERE tag_id = ?').get('tag_x');
+  assert.equal(links.n, 1, 'task links survive delete+restore');
+  const visible = ctx.db.prepare('SELECT id FROM tags WHERE user_id = ? AND deleted_at IS NULL AND id = ?').get(ctx.user.id, 'tag_x');
+  assert.equal(visible.id, 'tag_x', 'restored tag visible with the SAME id');
+});
+
+// BUG-55 (C4): message-content variables render at dispatch time
+test('renderContentVars substitutes date/time/datetime/weekday/title; unknown vars stay verbatim', async () => {
+  const { renderContentVars } = await import('../src/providers.js');
+  const task = { title: '站会', content: '{{date}} {{time}} {{datetime}} {{weekday}} {{title}} {{unknown}} {{date}}', timezone: 'Asia/Shanghai', scheduleSpec: { timezone: 'Asia/Shanghai' } };
+  const out = renderContentVars(task, { scheduled_for: 1793990000 });
+  assert.ok(!out.includes('{{date}}') && !out.includes('{{time}}') && !out.includes('{{datetime}}') && !out.includes('{{weekday}}') && !out.includes('{{title}}'));
+  assert.ok(out.includes('{{unknown}}'), 'unknown variables stay visible, never swallowed');
+  assert.ok(out.includes('站会'));
+  const sameDate = out.match(/(\d{4}\/\d{2}\/\d{2})/g);
+  assert.equal(new Set(sameDate).size, 1, 'all date occurrences consistent');
+});

@@ -233,6 +233,14 @@ CREATE TABLE directory_cache (
 );
 `,
   },
+  {
+    // v8 (BUG-47): soft delete for Tags — deleting a Tag keeps its task
+    //   links so undo/restore brings back the exact same Tag identity.
+    version: 8,
+    up: `
+ALTER TABLE tags ADD COLUMN deleted_at INTEGER;
+`,
+  },
 ];
 
 function migrate(db) {

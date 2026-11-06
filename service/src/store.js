@@ -297,14 +297,35 @@ export function createTaskStore(db, getConnection) {
   }
 
   function deleteTask(userId, taskId) {
-    getUserTask(userId, taskId);
-    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
-    db.prepare('DELETE FROM task_tags WHERE task_id = ?').run(taskId);
+    // BUG-46 (D9): delete archives — identity and run history survive so
+    // restore never duplicates executions. A second delete on an archived
+    // task is the explicit 彻底清理 escape hatch.
+    const task = getUserTask(userId, taskId);
+    if (task.status === 'archived') {
+      db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+      db.prepare('DELETE FROM task_tags WHERE task_id = ?').run(taskId);
+      return { archived: false, purged: true };
+    }
+    db.prepare(`UPDATE tasks SET status = 'archived', next_run_at = NULL, updated_at = ? WHERE id = ?`).run(nowSec(), taskId);
+    return { archived: true, purged: false };
+  }
+  function restoreTask(userId, taskId) {
+    // restoring lands on paused — NEVER active: a restored task must not
+    // start executing on its own (no duplicate executions); the user
+    // enables it explicitly
+    const task = getUserTask(userId, taskId);
+    if (task.status !== 'archived') throw badRequest('task is not archived');
+    const dec = decodeTask(task); // config/notify are JSON strings on the raw row
+    const missing = computeMissing(userId, dec.type, dec.config, dec.notify, dec.content);
+    db.prepare(`UPDATE tasks SET status = ?, missing = ?, updated_at = ? WHERE id = ?`)
+      .run(missing.length ? 'inactive' : 'paused', JSON.stringify(missing), nowSec(), taskId);
+    return getUserTask(userId, taskId);
   }
 
   function listTasks(userId, filters = {}) {
     let sql = 'SELECT * FROM tasks WHERE user_id = ?';
     const args = [userId];
+    if (filters.include !== 'archived') sql += " AND status != 'archived'";
     if (filters.status) {
       sql += ' AND status = ?';
       args.push(filters.status);
@@ -356,6 +377,7 @@ export function createTaskStore(db, getConnection) {
     createTask,
     updateTask,
     setStatus,
+    restoreTask,
     deleteTask,
     listTasks,
     recomputeMissing,

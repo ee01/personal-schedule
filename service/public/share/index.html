@@ -108,20 +108,37 @@ function fmtSpec(spec){
 
 async function loadShare(){
   const { status, body } = await api(`/shares/${state.token}`);
-  if (status !== 200) { document.getElementById('share').innerHTML = `<div class="card"><h1>分享不可用</h1><div class="sub">${esc(body.error||'链接已失效')}</div></div>`; return; }
+  if (status !== 200) {
+    // BUG-49: a revoked share gets its own honest, Chinese state — the raw
+    // error text never reaches the page and the extension card is irrelevant
+    const errText = String(body?.error || '');
+    const revoked = /revoked/.test(errText);
+    document.getElementById('share').innerHTML = `<div class="card"><h1>${revoked ? '该分享已撤销' : '分享不可用'}</h1>
+      <div class="sub">${revoked
+        ? '分享方已撤销这个链接，它不再可用。<b>你此前导入的副本不受影响</b>——它们是独立任务，保存在你的账户里。'
+        : '链接已失效或不存在。'}</div>
+      ${revoked ? '<div class="hint" style="margin-top:8px">如需最新任务，请联系分享方重新分享。</div>' : ''}</div>`;
+    state.unavailable = true; // renderExtPhase must not bring the install card back
+    const banner = document.getElementById('ext-banner'); if (banner) banner.style.display = 'none';
+    const card = document.getElementById('ext-card'); if (card) card.style.display = 'none';
+    return;
+  }
   state.data = body;
   const me = await api('/me');
   state.session = me.status === 200 ? me.body : null;
   render();
 }
 
+const importedKey = (token) => { try { return JSON.parse(localStorage.getItem('ps-imported-' + token) || '[]'); } catch { return []; } };
+const markImported = (token, keys) => { try { const set = new Set(importedKey(token)); keys.forEach((k) => set.add(k)); localStorage.setItem('ps-imported-' + token, JSON.stringify([...set])); } catch { /* localStorage unavailable */ } };
 function render(){
   const d = state.data;
+  const importedKeys = importedKey(state.token);
   const tasksHtml = d.tasks.map((t, i) => `
     <label class="task">
       <input type="checkbox" data-i="${i}" checked>
       <div>
-        <div class="t-title">${esc(t.title)} <span class="tag">${t.type}</span>${t.sensitivity?`<span class="sensitive">⚠ 敏感内容</span>`:''}</div>
+        <div class="t-title">${esc(t.title)} <span class="tag">${t.type}</span>${importedKeys.includes(t.refKey)?'<span class="tag" style="background:#2f6b3f">已导入</span>':''}${t.sensitivity?`<span class="sensitive">敏感内容</span>`:''}</div>
         <div class="t-meta">${esc(fmtSpec(t.scheduleSpec))}</div>
         <div class="t-meta">${esc((t.content||'').slice(0,140))}</div>
       </div>
@@ -133,7 +150,7 @@ function render(){
       ${state.session?'':`<div class="hint" style="margin-bottom:10px">导入需要你的 Personal Schedule 身份：先在下方登录（或在已安装的 Personal AI 扩展中导入）。</div>`}
       <div class="row" style="margin-bottom:14px">
         ${state.session
-          ? `<span class="hint">已登录：${esc(state.session.email)}</span>`
+          ? `<span class="hint">已登录：${state.session.isGuest ? '单设备身份（本机访客，导入的任务保存在这台设备的账户里）' : esc(state.session.email)}</span>`
           : `<input type="password" id="login-token" placeholder="你的 Schedule API Token" style="flex:1;min-width:240px">
              <button class="ghost" id="login-btn">登录</button>`}
       </div>
@@ -183,7 +200,12 @@ function renderImportResult(r, opts) {
     return;
   }
   if (r.status === 200) {
-    const rows = r.body.results.map((res) => `<div class="result ${res.status==='failed'?'err':'ok'}">${res.status==='failed'?'❌ 失败：'+esc(res.reason):'✅ 已导入（默认未启用，请到「需要补全」中绑定收件人/执行器后启用）'}</div>`).join('');
+    // BUG-48: plain text status (no emoji) + record imported tasks so a
+    // later visit marks them
+    const okKeys = [];
+    state.data.tasks.forEach((t, i) => { if (r.body.results[i] && r.body.results[i].status !== 'failed') okKeys.push(t.refKey); });
+    markImported(state.token, okKeys);
+    const rows = r.body.results.map((res) => `<div class="result ${res.status==='failed'?'err':'ok'}"><b>${res.status==='failed'?'导入失败':'已导入'}</b>${res.status==='failed'?'：'+esc(res.reason):'（默认未启用，请到「需要补全」中绑定收件人/执行器后启用）'}</div>`).join('');
     out.innerHTML = rows + `<div class="hint" style="margin-top:8px">导入的任务为独立副本，不随本分享变化。到 <a href="/app">Personal Schedule</a> 的「需要补全」中完成配置。</div>`;
     toast('导入请求已完成', 'ok');
   } else {
@@ -236,7 +258,7 @@ document.addEventListener('change', (e) => { if (e.target.matches('input[data-i]
 function renderExtPhase() {
   const banner = document.getElementById('ext-banner');
   const card = document.getElementById('ext-card');
-  if (!card) return;
+  if (!card || state.unavailable) return; // revoked/expired share: no install flow
   if (extState.phase === 'ready') {
     banner.style.display = 'block';
     banner.textContent = '已检测到 Personal AI 扩展' + (extState.version ? `（v${extState.version}）` : '') + '，可在扩展中一键导入本任务包；你的勾选已保留。';
