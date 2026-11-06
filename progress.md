@@ -170,3 +170,9 @@
 - **UI**：追问链视图仅对 waiting_reply/deferred 会话显示"追问上限 +2（不立即发送）"按钮；每次点击生成并复用同一 requestId；成功后以原历史源刷新、不标记"已发送"；修复抽屉 Tab 按钮绑定时机（渲染后再绑定）。
 - **浏览器验证**：追问链 tab 渲染真实会话（pending_approval 第 1/2 轮）；+2 完整点击链路需要可控的 waiting 会话——approve 返回 500"Target is not configured"（测试 pak 无 RC 目标绑定），属受控凭据缺口，如实单列，不伪造通过。composer 独立浏览器验收可复用 `deploy/browser-verification.mjs`。
 - 65/65 测试；部署指纹：/app=`5fb6e616…`、/app/app.js=`286a4a3c…`、/share/index.html=`47093c59…`。
+
+## 2026-11-07 · 受控集成缺陷修复 + 分享页品牌色（完成，已部署）
+
+- **Sol 受控验收的5个缺陷全部修复**：①chain 代理透传 limit/offset/eventLimit；②历史渲染读 eventType/payload（memory 实际字段）+type/detail 回退；③归属校验读 items 包装（此前 +2 合法请求被 400 误拒）；④真实账号会话绑定他人邮箱 → 显式 conflict 拒绝（不再静默换 userId），访客会话仍走合并升级；⑤访客合并同时迁移 connections（RC/Memory 凭据随账号保留）。
+- **分享页品牌色核实为真实缺陷**：`--brand:#7c8cff` 经 button/tag/banner 实际渲染（非仅变量存在）。已统一为基线 lime `#cdf26b`（含 ok/warn/bad 语义色对齐）；浏览器计算样式验证：按钮背景 `rgb(205,242,107)` ✓。
+- 65/65 测试；新指纹：/app=`5fb6e616…`、/app/app.js=`11e59fcb…`、/share/index.html=`05734f06…`；走查脚本随 deploy/ 交付。
