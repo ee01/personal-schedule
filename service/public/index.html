@@ -752,6 +752,7 @@ const S = { user:null, view:'tasks', sub:'all', viewMode:'list', tasks:[], tags:
 let DLG=null, MENU=null, TOASTS=[];
 
 /* ---------- time formatting (prototype semantics) ---------- */
+function fmtNextText(sec){ if(!sec) return '—'; const d=new Date(sec*1000); const y=(n)=>n<10?'0'+n:n; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())} · ${rel}` }
 function tzLabel(tz) {
   // correct UTC offset via Intl (BUG-27: local-diff hack printed UTC-0.000…)
   try {

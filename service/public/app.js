@@ -124,7 +124,9 @@ const missingLabel = (m) => MISSING_L[m] || m;
 function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
 function specText(t) {
   const s = taskSpec(t); if (!s || !s.kind) return '';
-  if (s.kind === 'one_shot') return `一次 · ${fmtNext(s.dateTime)}`;
+  // BUG-43: plain text here — this value passes through esc() in the drawer
+  // and confirm page; the HTML variant leaked as raw markup
+  if (s.kind === 'one_shot') return `一次 · ${fmtNextText(s.dateTime)}`;
   if (s.kind === 'rate') return `每 ${s.intervalMinutes} 分钟`;
   if (s.kind === 'cron') {
     // BUG-04: normalize 5-field (mi hh dom mo dow) and 6-field (sec mi hh
@@ -145,9 +147,11 @@ function specText(t) {
 }
 function recipientsText(t) {
   const list = t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }] : []);
-  if (t.type === 'agent_task' && t.notify?.publish?.enabled) return (t.notify.publish.recipients || []).map((r) => r.name || r.id).join('、') || '未设置';
+  if (t.type === 'agent_task' && t.notify?.publish?.enabled) return (t.notify.publish.recipients || []).map((r) => r.name || r.raw || '（名称未知）').join('、') || '未设置';
   const shown = list.map((r) => r.name).filter(Boolean).join('、');
-  return shown || (list.length ? '待补全' : '');
+  // BUG-44: a valid deliverable id without a display name is NOT a missing
+  // recipient — show 名称未知 instead of 待补全 (the server reports nothing missing)
+  return shown || (list.length ? '（名称未知）' : '');
 }
 function filteredTasks() {
   let list = S.tasks;
@@ -399,11 +403,14 @@ function createModalHTML() {
 }
 function renderCfPane() {
   const pane = $('#cfPane'); if (!pane || CF.done) return;
+  // every re-render re-binds: picker picks, chip removals and mode switches
+  // replace the DOM, and the old bindings died with it
   if (CF.step === 1) { pane.innerHTML = cfStep1(); $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); }); }
   if (CF.step === 2) pane.innerHTML = cfStep2();
   if (CF.step === 3) pane.innerHTML = cfStep3();
   if (CF.step === 4) pane.innerHTML = cfStep4();
   if (CF.step === 5) pane.innerHTML = cfStep5();
+  wireCfPane();
 }
 function cfStep1() {
   const chips = ['每天 9:00 提醒我站会', '每周五 17:00 给 #平台周会 发周报', '帮我问 Eason 本周五前确认发布时间', '每天 10:00 查询阻塞工单并发到 #值班群'];
@@ -463,7 +470,10 @@ function cfStep2() {
   return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
 }
 function chip(rec, i) {
-  return `<span class="chip">${esc(rec.name||rec.raw)}${rec.unresolved?' <span class="muted">(未解析)</span>':''} <span data-rmrec="${i}" role="button" aria-label="移除">×</span></span>`;
+  // BUG-44: an id-only recipient (API/import created) keeps its identity and
+  // honestly shows 名称未知 — no fabricated name, no false "missing"
+  const label = rec.name || rec.raw || '（名称未知）';
+  return `<span class="chip">${esc(label)}${rec.unresolved?' <span class="muted">(未解析)</span>':''} <span data-rmrec="${i}" role="button" aria-label="移除">×</span></span>`;
 }
 function cfStep3() {
   if (['asme','bot','ai_report'].includes(CF.type)) {
@@ -578,7 +588,7 @@ function cfStep5() {
     ['标题', CF.title || '（自动生成）'],
     ['类型', CF.type ? TYPE_LABEL[CF.type] : '待确认'],
     ['内容', CF.content || (CF.type === 'outreach' ? (CF.config?.question || '') : '') || '待确认'],
-    ['对象', CF.recipients.map((r) => r.name || r.raw).join('、') || '待确认'],
+    ['对象', CF.recipients.length ? CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') : '待确认'],
     ['规则', spec ? specText({ scheduleSpec: spec }) || '待确认' : '待确认'],
     ['时区', (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai'],
   ];
@@ -912,9 +922,7 @@ function newTagDlg(forTask) {
 function wireCf() {
   const one = $('#cfOne'); if (one) { one.onkeydown = (e) => e.key === 'Enter' && tryOneLine(one.value); $$('#cfPane [data-demo]').forEach((c) => c.onclick = () => tryOneLine(c.dataset.demo)); }
 
-  // NOTE: step/footer bindings live in renderCfPane (called below) so they
-  // are never attached twice to the same DOM node.
-  wireCfPane();
+  // pane bindings happen inside renderCfPane after each (re-)render
 }
 
 function wireCfPane() {
@@ -927,6 +935,14 @@ function wireCfPane() {
   // chips 输入（X1）
   wireChips('recInput', 'recBox', 'recPicker', 'recipients');
   wireChips('pubRecInput', 'pubRecBox', 'recPicker2', 'publish.recipients');
+  // BUG-42: the × on a chip actually removes it and syncs form state — the
+  // removed recipient is NOT re-sent by the save (chatId cleared, no backfill)
+  $$('#cfPane [data-rmrec]').forEach((x) => x.onclick = () => {
+    const idx = +x.dataset.rmrec;
+    const arr = x.closest('#pubRecBox') ? CF.publish.recipients : CF.recipients;
+    if (idx >= 0 && idx < arr.length) arr.splice(idx, 1);
+    renderCfPane();
+  });
   $$('#cfPane [data-ident]').forEach((b) => b.onclick = () => { CF.identity = b.dataset.ident.split(':')[0] === 'bot' ? 'bot' : 'user'; renderModal(); });
   $$('#cfPane [data-exec]').forEach((b) => b.onclick = () => { CF.executor = b.dataset.exec; renderCfPane(); });
   $$('#cfPane [data-nm]').forEach((b) => b.onclick = () => { CF.notifyMode = b.dataset.nm; renderCfPane(); });
@@ -1076,10 +1092,12 @@ async function saveTaskInner(finalStatus) {
   if (!spec) { toast('时间规则还不完整——请到「时间」步骤选择频率并填好时刻', { kind: 'err' }); CF.step = 4; renderModal(); return; }
   // BUG-05/41: the recipient gate is an EXECUTION gate — only 排程/启用 must
   // block; drafts are allowed to be incomplete (missing shows as 待补全)
-  const target0 = CF.editing || CF.lastDraftId;
-  const cur0 = target0 ? S.tasks.find((t) => t.id === target0) : null;
-  const activates = finalStatus === 'active' || (!target0 && finalStatus !== 'draft')
-    || (finalStatus !== 'draft' && cur0 && ['draft','inactive'].includes(cur0.status) && !(cur0.missing || []).length);
+  // the recipient gate is an EXECUTION gate: only an explicit 排程/启用
+  // ('active') is blocked on missing/unresolved recipients. Plain edits
+  // ('keep') save as-is — the server re-gates status (a cleared recipient on
+  // an active task turns it inactive; a draft stays a draft), and blocking
+  // here would prevent users from saving recipient changes at all (BUG-42)
+  const activates = finalStatus === 'active';
   if (activates && ['asme','bot','ai_report'].includes(CF.type)) {
     const bad = (CF.recipients || []).filter((r) => r.unresolved || !r.id);
     if (!CF.recipients.length || bad.length) {
