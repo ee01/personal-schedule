@@ -184,3 +184,12 @@
 - **P2（BUG-27–36）**：时区标签 Intl 正确计算（上海 UTC+8）；倒计时格式修复；data-icon 全站注入；agent/jira 图标映射；侧栏布局/全五类型/切换不跳转；周视图含暂停（虚线）；对象显示名而非 chatId；连接页隐藏 guest 邮箱；/apple-touch-icon.png 根挂载修复（含根 mount 边界守卫 bug——两轮修复后全资源 200）；分享页 favicon 引用。
 - **密钥处置**：走查脚本中的明文 pak key 改为 `SCHEDULE_TEST_MEMORY_KEY` 环境注入（未配置时退出 2）；**原 key 已在 memory 侧吊销**（旧 key 实测 401：health 与 write 路径均拒绝），替换 key 仅存服务器 `~/personal-schedule/.e2e-memory-key`（chmod 600，不回显、不入仓库）；服务端同步补 `GET /tags/:id/tasks`（分享预览）与 listShares liveCount。
 - 66/66 测试；部署指纹：/app=`46804e36…`、/app/app.js=`3a292ad7…`、/share/index.html=`02a5593e…`。
+
+## 2026-11-07 · 复验缺陷修复轮（完成，68/68 测试，已部署）
+
+- **BUG-37 页面截断**：从 e4214c4 基线恢复完整 `/app` HTML（上一轮 BUG-36 提交把文件截断——丢失脚本结束、app.js 引用与 helper）；在恢复后的基线上重放本轮所有 P0–P2 修复。线上验证：`/app` 含 `app.js` 引用、HTTP 200。
+- **BUG-38 tz() 未定义**：specFromFreq/previewNext 改用 cfTimezone()（直读时区下拉）；specText 人性化渲染 cron（每周/工作日/每月不再出现 undefined）。
+- **未声明 base**：chain/actions 在转发前声明 memory base（500 根因）；eventOffset 一并透传。
+- **单设备绑定**：已有账号邮箱 → 两种会话类型均显式 conflict（不静默迁移/覆盖连接）；新邮箱 → 原位升级（userId 保留、连接保留、不建第二个账号）；两条新回归测试 + 旧测试按修正语义更新（旧断言编码的是缺陷行为）。
+- **本地浏览器环境**：Chromium 导航当前在本机网络层超时（与 Sol 报告的环境问题一致），node fetch/curl 对同 URL 返回 200；未注入页面补丁、未忽略证书。
+- 68/68 单测；部署指纹：/app=`0ea097d0…`、/app/app.js=`682a315e…`、/share=`02a5593e…`。
