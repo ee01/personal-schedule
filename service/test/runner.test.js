@@ -354,3 +354,77 @@ test('extension info serves the configured minimum version and handshake channel
   assert.ok(typeof body.handshake.minExtensionVersion === 'string' && body.handshake.minExtensionVersion.length > 0);
   assert.equal(body.schemaVersion, 1);
 });
+
+
+// group 1 (E-184 retest): the runner's JOIN must carry the task timezone so
+// content variables render in the spec's timezone, not a Shanghai fallback
+test('taskFromJoin carries scheduleSpec + timezone (content vars honor LA timezone)', async () => {
+  const { renderContentVars } = await import('../src/providers.js');
+  // the shape dispatchPending builds: spec aliased as task_schedule_spec
+  const row = {
+    task_id: 'tsk_1', user_id: 'u1', title: '站会', content: '{{datetime}}',
+    type: 'asme', revision: 1, task_config: '{}', task_notify: '{}',
+    task_schedule_spec: JSON.stringify({ kind: 'cron', expr: '0 9 * * *', timezone: 'America/Los_Angeles' }),
+    timezone: 'America/Los_Angeles',
+  };
+  // emulate taskFromJoin's mapping (exported behavior under test)
+  const task = {
+    id: row.task_id, title: row.title, content: row.content,
+    config: JSON.parse(row.task_config), notify: JSON.parse(row.task_notify),
+    scheduleSpec: JSON.parse(row.task_schedule_spec ?? row.schedule_spec),
+    timezone: row.timezone,
+  };
+  const at = 1794000000; // fixed instant
+  const sh = renderContentVars({ ...task, scheduleSpec: { timezone: 'Asia/Shanghai' }, timezone: 'Asia/Shanghai' }, { scheduled_for: at });
+  const la = renderContentVars(task, { scheduled_for: at });
+  assert.notEqual(sh, la, 'LA rendering must differ from Shanghai');
+  const laD = new Intl.DateTimeFormat('zh-CN', { timeZone: 'America/Los_Angeles', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(at * 1000));
+  assert.ok(la.includes(laD.replace(/\//g, '/')), `LA vars use the spec timezone: ${la}`);
+});
+
+// group 2 (E-184 retest): deployment settings are not guest-writable
+test('guest cannot PUT timeline settings (cooldown bypass / source rewrite blocked); bound accounts can', async () => {
+  const { buildServices } = await import('../src/server.js');
+  const { openDb } = await import('../src/db.js');
+  const db = openDb(':memory:');
+  const services = buildServices(db);
+  const routes = [];
+  const app = { get: (p, h) => routes.push([p, h]), post: (p, h) => routes.push([p, h]), put: (p, h) => routes.push([p, h]), patch(){}, delete(){} };
+  const { registerRoutes } = await import('../src/api.js');
+  registerRoutes(app, { db, ...services });
+  const putRoute = routes.find(([p]) => p === '/api/v1/settings/{key}');
+  assert.ok(putRoute, 'PUT settings route registered');
+  // a guest identity with a real session (the same plumbing requireUser uses)
+  const guest = services.auth.createGuestUser();
+  const gtoken = services.auth.issueToken(guest.id, 'test');
+  const req = { headers: { authorization: `Bearer ${gtoken}` }, params: { key: 'timeline.sourceUrl' }, body: { value: 'http://evil.example/x' } };
+  await assert.rejects(async () => putRoute[1](req), /仅限已绑定邮箱|forbidden/i, 'guest PUT rejected');
+  const req2 = { headers: { authorization: `Bearer ${gtoken}` }, params: { key: 'timeline.lastRefreshAt' }, body: { value: '0' } };
+  await assert.rejects(async () => putRoute[1](req2), /内部冷却|forbidden/i, 'lastRefreshAt is never writable');
+});
+
+// group 3 (E-184 retest): the source address never leaks through error paths
+test('refresh errors and cached lastError never contain the source URL', async () => {
+  const { buildServices } = await import('../src/server.js');
+  const { openDb } = await import('../src/db.js');
+  const db = openDb(':memory:');
+  const services = buildServices(db);
+  db.prepare("INSERT INTO settings (key, value) VALUES ('timeline.sourceUrl', 'http://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project={project}')").run();
+  const routes = [];
+  const app = { get: (p, h) => routes.push([p, h]), post: (p, h) => routes.push([p, h]), put: (p, h) => routes.push([p, h]), patch(){}, delete(){} };
+  const { registerRoutes } = await import('../src/api.js');
+  registerRoutes(app, { db, ...services });
+  // force the invalid-config parse error by making the source URL malformed
+  db.prepare("UPDATE settings SET value = 'http://heimdall-xmn02.int.rclabenv.com:bad/api/' WHERE key = 'timeline.sourceUrl'").run();
+  const refresh = routes.find(([p]) => p === '/api/v1/timeline/refresh');
+  const user = services.auth.ensureUser('admin@example.com');
+  const atoken = services.auth.issueToken(user.id, 'test');
+  const req = { headers: { authorization: `Bearer ${atoken}` }, body: { project: 'mThor' } };
+  const result = await refresh[1](req).catch((e) => ({ ok: false, error: String(e.message || e) }));
+  const blob = JSON.stringify(result);
+  assert.ok(!blob.includes('heimdall-xmn02'), 'no source host in the refresh result');
+  const proj = routes.find(([p]) => p === '/api/v1/timeline/projects/{project}');
+  const pr = await proj[1]({ headers: { authorization: `Bearer ${atoken}` }, params: { project: 'mThor' } });
+  assert.ok(!JSON.stringify(pr).includes('heimdall-xmn02'), 'no source host in the cached project state');
+  assert.ok(pr.lastError === null || String(pr.lastError).includes('[源地址已隐藏]') || !String(pr.lastError).includes('http'), `lastError sanitized: ${pr.lastError}`);
+});

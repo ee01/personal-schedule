@@ -25,6 +25,26 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
     return template.includes('{project}') ? template.replace('{project}', encodeURIComponent(project)) : template;
   }
 
+  // group 3 (E-184 retest): error messages must never carry the source
+  // address — invalid URL configs make the parser echo the full URL, which
+  // used to reach clients via refresh results and the project cache's
+  // lastError. Redact both the built URL and the configured template.
+  function redactSource(message) {
+    const template = setting('sourceUrl', process.env.SCHEDULE_TIMELINE_SOURCE_URL || '');
+    let out = String(message ?? '');
+    if (template) {
+      out = out.split(template).join('[源地址已隐藏]');
+      for (const project of PROJECTS) {
+        const url = template.includes('{project}') ? template.replace('{project}', encodeURIComponent(project.id)) : template;
+        if (url) out = out.split(url).join('[源地址已隐藏]');
+      }
+    }
+    // defense in depth: any http(s) URL in an error string is deployment
+    // internal detail — mask the host part
+    out = out.replace(/https?:\/\/[^\s'"]+/g, (m) => (template && m.includes(template.slice(0, 20)) ? '[源地址已隐藏]' : m));
+    return out;
+  }
+
   function normalizeReleases(payload) {
     // Real internal Release Info contract (H6, pinned 2026-11-06 against
     // https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=<P>):
@@ -91,12 +111,14 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
       ).run(project, JSON.stringify(releases), nowSec());
       return { ok: true, releases };
     } catch (error) {
-      // keep last-known-good, mark stale (T11)
+      // keep last-known-good, mark stale (T11); the stored error is redacted
+      // at the source so no client-facing path can leak the address
+      const safe = redactSource(String(error.message || error));
       db.prepare(
         `INSERT INTO timeline_cache (project, stale, last_error) VALUES (?,1,?)
          ON CONFLICT(project) DO UPDATE SET stale = 1, last_error = excluded.last_error`,
-      ).run(project, String(error.message || error));
-      return { ok: false, error: String(error.message || error) };
+      ).run(project, safe);
+      return { ok: false, error: safe };
     }
   }
 
@@ -283,5 +305,5 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
     });
   }
 
-  return { refreshProject, recomputeProject, refreshAndRecompute, cacheFor, startMaintenanceLoop, computeTargetInstant, normalizeReleases, listProjects };
+  return { refreshProject, recomputeProject, refreshAndRecompute, cacheFor, startMaintenanceLoop, computeTargetInstant, normalizeReleases, listProjects, redactSource };
 }

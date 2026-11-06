@@ -777,6 +777,12 @@ function describeRole(type, cfg) {
   app.put('/api/v1/settings/{key}', (req) => {
     const user = requireUser(db, auth, req);
     if (!req.params.key.startsWith('timeline.')) throw badRequest('only timeline.* settings are editable');
+    // security boundary (E-184 retest): deployment-level settings must not be
+    // writable by unbound guest identities — a new single-device identity
+    // could otherwise bypass the refresh cooldown (timeline.lastRefreshAt=0)
+    // or rewrite the global source URL. Normal task capability is untouched.
+    if (req.params.key === 'timeline.lastRefreshAt') throw forbidden('timeline.lastRefreshAt 是内部冷却标记，不接受写入');
+    if (user.is_guest === 1) throw forbidden('部署级设置仅限已绑定邮箱的账户修改');
     db.prepare('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(req.params.key, String(req.body?.value ?? req.body?.['']));
     timeline.refreshAndRecompute({ force: true }).catch(() => {});
@@ -845,7 +851,9 @@ function describeRole(type, cfg) {
     return {
       configured: true,
       stale: cache.stale === 1,
-      lastError: cache.last_error,
+      // group 3: never surface the source address through the error path —
+      // sanitize stored errors too (legacy rows may predate the fix)
+      lastError: timeline.redactSource(cache.last_error),
       fetchedAt: cache.fetched_at,
       releases: cache.releases,
     };
@@ -865,7 +873,7 @@ function describeRole(type, cfg) {
     if (project) {
       const result = await timeline.refreshProject(project);
       if (result.ok) await timeline.recomputeProject(project);
-      return result;
+      return { ...result, error: result.error ? timeline.redactSource(result.error) : undefined };
     }
     await timeline.refreshAndRecompute({ force: true });
     return { ok: true };
