@@ -193,3 +193,10 @@
 - **单设备绑定**：已有账号邮箱 → 两种会话类型均显式 conflict（不静默迁移/覆盖连接）；新邮箱 → 原位升级（userId 保留、连接保留、不建第二个账号）；两条新回归测试 + 旧测试按修正语义更新（旧断言编码的是缺陷行为）。
 - **本地浏览器环境**：Chromium 导航当前在本机网络层超时（与 Sol 报告的环境问题一致），node fetch/curl 对同 URL 返回 200；未注入页面补丁、未忽略证书。
 - 68/68 单测；部署指纹：/app=`0ea097d0…`、/app/app.js=`682a315e…`、/share=`02a5593e…`。
+
+## 2026-11-07 · 启动死循环修复轮（完成，已部署）
+
+- **BUG-40**：图标 hydration 改为幂等+写守卫——MutationObserver 回调内先断开自写响应（writing 标志 + 延迟批处理），fill 只处理无 svg 子节点的占位元素；真实浏览器验证 1440/390 双视口 DOMContentLoaded 200、#btnNew 可操作、多次动态重渲染后图标仍在、页面持续响应、无 JS 错误。此前"本机浏览器环境超时"的判断撤回——完整 Chrome 二进制导航超时，headless shell 正常，根因是页面脚本死循环（BUG-40）。
+- **BUG-39**：`.webmanifest` MIME 纠正为 `application/manifest+json`（部署实测）。
+- 新增 `deploy/boot-smoke.mjs`（正式启动冒烟，无补丁）；68/68 单测保持通过。
+- 部署指纹：/app=`44ebe0a7…`、/app/app.js=`682a315e…`、/share/index.html=`02a5593e…`（app.js 与上轮一致，仅 index.html 变更）。
