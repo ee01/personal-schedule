@@ -64,3 +64,15 @@
 - **V4/H4 状态**：E 的 schedule 账号尚无任何 RC/Multica 连接 → 无法做真实发送/webhook 触发验证（不冒充）。Bot 凭据 client_credentials 自动续期已实现；AsMe 需用户在 Settings 重新授权（或经 E-184 扩展桥接）。
 - deploy.sh：launchctl bootstrap 加重试（bootout 后偶发 error 5）。
 - 39/39 测试通过；提交 653aaa2；schedule 服务已重部署（health ok）。
+
+## 2026-11-06 · E-183 E-184 契约对齐轮（完成，53/53 测试通过，提交 fc6b6ba + content 门禁）
+
+- **上一轮中断的 WIP 完成并修复**：exactRun/jiraShare 测试挂起（undici keep-alive 连接 + mock 服务器关闭）与 T3 时区时钟依赖修复；jiraImportState 转移报错信息修正；发布测试补 mock RC 交付端点。
+- **精确回执（gap ③）**：enqueue 的 actionId 持久化到 occurrence；只轮询 /agent-tasks/runs/:id/result 并校验 occ_key/taskId；显式 finalOutput/publishFields 之外不合成（summary 永不回退为正文）；无 actionId 的 memory 派发在租约到期后转 needs_attention（手动重发安全）；派发批 await（tick 确定性）。
+- **JIRA 分享材料（gap ①②）**：分享实时视图携带服务端再净化的 jiraRuleExport（secret 字段拒收、actor 身份置空）；导入保留材料 + pending_target；**缺材料不创建**；激活门禁 jiraImportState 状态机（pending→created_disabled_needs_review→completed + webhook 绑定）。
+- **task-create 幂等键**（per-owner）：未知创建结果可安全重放。
+- **分享页**：改用 personal-schedule-extension-v1 presence 频道，不再在旧频道回包（回声已消除）。
+- **新增**：agent_task 缺执行指令（content）时 gate 为 inactive（memory 拒绝空 task 文本——E2E 发现）。
+- **线上验收证据**：① 无源权限接收者导入含材料任务成功（draft 保留材料、pending_target、激活被门禁）；缺材料项导入被拒（未创建）；② 状态机全链路（非法转移拒绝→报告 disabled 副本仍被门禁→completed+webhook 解锁激活成功）；③ 重复 occurrence 幂等（上轮 live：duplicate_occurrence）；④ agent_task 线上真实派发→actionId 持久化→exact-run 轮询到自身终态（runId 一致；测试用户执行器栈未配置导致 failed，属环境事实非契约失败）；⑤⑥ publishFields 对象校验/缺正文暂停不回退摘要、通知/发布单一发送方——单测覆盖 + enqueue 响应实测 notificationOwner:'memory' / publishOwner:'schedule_service'。
+- Memory 健康（复检）：/health 未鉴权探针恒 degraded/connected:false（设计语义），数据完好（19005/36）。
+- 已部署 schedule 服务（md5 校验一致）；E2E 测试账号/密钥沿用（glm-itest / glm-itest2，联调后清理）。
