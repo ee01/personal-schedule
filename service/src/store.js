@@ -47,7 +47,7 @@ export function createTaskStore(db, getConnection) {
     }
   }
 
-  function computeMissing(userId, type, config, notify) {
+  function computeMissing(userId, type, config, notify, content) {
     const missing = [];
     const con = (key) => getConnection(userId, key);
     if (type === 'asme' || type === 'bot') {
@@ -79,6 +79,8 @@ export function createTaskStore(db, getConnection) {
         missing.push('template.recipients');
       }
     } else if (type === 'agent_task') {
+      // the execution instruction is required: memory rejects empty task text
+      if (!String(content || '').trim()) missing.push('content');
       const executor = config.executor || 'memory';
       if (executor === 'memory') {
         if (!con('memory')) missing.push('connection:memory');
@@ -131,7 +133,7 @@ export function createTaskStore(db, getConnection) {
     validateScheduleSpec(scheduleSpec);
     const config = input.config || {};
     const notify = input.notify || {};
-    const missing = computeMissing(userId, type, config, notify);
+    const missing = computeMissing(userId, type, config, notify, input.content);
     const now = nowSec();
     const task = {
       id: newId('tsk'),
@@ -183,7 +185,7 @@ export function createTaskStore(db, getConnection) {
     if (typeof next.title !== 'string' || !next.title.trim()) throw badRequest('title required');
     validateScheduleSpec(next.scheduleSpec);
     const notify = normalizeNotify(next.notify, task.type);
-    const missing = computeMissing(userId, task.type, next.config, notify);
+    const missing = computeMissing(userId, task.type, next.config, notify, next.content);
     const now = nowSec();
     // Any spec/content change bumps the revision so occurrence keys of already
     // scheduled runs stay distinct (task:revision:slot).
@@ -321,7 +323,7 @@ export function createTaskStore(db, getConnection) {
   function recomputeMissing(userId, taskId) {
     const task = getUserTask(userId, taskId);
     const current = decodeTask(task);
-    const missing = computeMissing(userId, task.type, current.config, current.notify);
+    const missing = computeMissing(userId, task.type, current.config, current.notify, current.content);
     const status = missing.length ? 'inactive' : task.status === 'inactive' ? task.status : task.status;
     db.prepare('UPDATE tasks SET missing = ?, status = ?, updated_at = ? WHERE id = ?').run(
       JSON.stringify(missing),
