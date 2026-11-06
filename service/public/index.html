@@ -112,7 +112,7 @@ function renderLogin() {
   <div class="wrap" style="max-width:420px;margin-top:12vh">
     <div class="card">
       <h2>Personal Schedule</h2>
-      <div class="muted" style="margin-bottom:12px">输入你的 API Token 登录（Personal AI 扩展配置同一 Token）。</div>
+      <div class="muted" style="margin-bottom:12px">输入登录令牌（PAT 式，仅显示一次；登录后可在 设置 → 账号与登录令牌 新建/复制）。扩展只在导入分享包时需要。</div>
       <div class="field"><input type="password" id="tok" placeholder="pst_..."></div>
       <button id="go">登录</button>
     </div>
@@ -255,6 +255,12 @@ function connForm(key, fields, hint) {
 
 function pageSettings() {
   return `
+  <div class="card">
+    <h2>账号与登录令牌</h2>
+    <div class="muted" style="margin-bottom:10px">登录身份：<b>${esc(S.user.email)}</b>。登录令牌相当于你的 PAT：用于本页登录、扩展绑定与脚本调用，仅显示一次，可随时新建/吊销。它不是 memory 同步凭据（帮我问/帮我做在下方 memory 连接里单独配置）。</div>
+    <div class="row" style="margin-bottom:10px"><button id="new-token">＋ 新建登录令牌</button><span class="muted" id="new-token-out"></span></div>
+    <table><thead><tr><th>标签</th><th>创建时间</th><th>最近使用</th><th></th></tr></thead><tbody id="token-rows"></tbody></table>
+  </div>
   <h2>连接</h2>
   ${connForm('rc_user', [['RC Server', 'serverUrl', 'value=https://platform.ringcentral.com'], ['用户 JWT Token', 'token', ''], ['我的 ChatId（通知收件）', 'ownChatId', '']], '以我的身份发帖（AsMe）与个人运行通知。Token 过期后需重新授权。')}
   ${connForm('rc_bot', [['RC Server', 'serverUrl', 'value=https://platform.ringcentral.com'], ['Bot Client ID', 'clientId', ''], ['Bot Client Secret', 'clientSecret', ' type=password']], 'Bot 发帖使用 Client Credentials 自动获取 token，保存在服务端。')}
@@ -302,6 +308,15 @@ function wire(view) {
     document.querySelectorAll('[data-revoke]').forEach((b) => b.onclick = async () => { if (confirm('撤销后链接立即失效，确定？')) { await api(`/shares/${b.dataset.revoke}/revoke`, { method: 'POST' }); await reload(); } });
   }
   if (view === 'settings') {
+    $('#new-token').onclick = async () => {
+      const r = await api('/auth/tokens', { method: 'POST', body: JSON.stringify({ label: 'web 签发' }) });
+      if (r.status !== 200) { $('#new-token-out').textContent = '签发失败'; return; }
+      // one-time display with a copy button (never retrievable again)
+      $('#new-token-out').innerHTML = `<span style="font-family:ui-monospace,monospace">${esc(r.body.token)}</span> <button class="ghost small" id="copy-token">复制</button>`;
+      $('#copy-token').onclick = () => navigator.clipboard.writeText(r.body.token);
+      loadTokens();
+    };
+    loadTokens();
     document.querySelectorAll('[data-save-conn]').forEach((b) => b.onclick = async () => saveConn(b.dataset.saveConn, false));
     document.querySelectorAll('[data-test-conn]').forEach((b) => b.onclick = async () => saveConn(b.dataset.testConn, true));
     $('#save-timeline').onclick = saveTimeline;
@@ -320,6 +335,25 @@ async function saveConn(key, test) {
   }
   const r2 = await api(`/connections/${key}/test`, { method: 'POST', body: JSON.stringify({ value }) });
   $(`#conn-result-${key}`).textContent = r2.body.ok === true ? `连接正常 ${r2.body.detail ? JSON.stringify(r2.body.detail) : ''}` : `失败：${r2.body.error || '未知'}`;
+}
+
+async function loadTokens() {
+  const r = await api('/auth/tokens');
+  const rows = (r.body || []).map((t) => `<tr>
+    <td>${esc(t.label || '—')}</td>
+    <td class="muted">${new Date(t.created_at * 1000).toLocaleDateString()}</td>
+    <td class="muted">${t.lastUsed ? '是' : '未使用'}</td>
+    <td><button class="ghost small danger" data-tok-del="${t.id}">吊销</button></td>
+  </tr>`).join('');
+  const el = $('#token-rows');
+  if (el) {
+    el.innerHTML = rows || '<tr><td colspan="4" class="muted">无令牌</td></tr>';
+    el.querySelectorAll('[data-tok-del]').forEach((b) => b.onclick = async () => {
+      if (!confirm('吊销后用该令牌的登录/扩展绑定会立即失效，确定？')) return;
+      await api(`/auth/tokens/${b.dataset.tokDel}`, { method: 'DELETE' });
+      loadTokens();
+    });
+  }
 }
 
 async function loadSettings() {

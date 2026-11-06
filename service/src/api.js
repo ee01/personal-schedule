@@ -75,6 +75,33 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
 
   app.get('/api/v1/me', (req) => publicUser(requireUser(db, auth, req)));
 
+  // ------------------------------------------------------------ tokens (self-service)
+  // A logged-in user can list/create/revoke their own login tokens, so the
+  // credential is always copyable from inside the app (no CLI dependency).
+  app.get('/api/v1/auth/tokens', (req) => {
+    const user = requireUser(db, auth, req);
+    return db
+      .prepare('SELECT id, label, created_at, last_used_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC')
+      .all(user.id)
+      .map((row) => ({ ...row, lastUsed: row.last_used_at ? true : false }));
+  });
+
+  app.post('/api/v1/auth/tokens', (req) => {
+    const user = requireUser(db, auth, req);
+    const label = String(req.body?.label || '').slice(0, 64) || 'web 签发';
+    const token = auth.issueToken(user.id, label);
+    // the full token is returned exactly once — only its hash is stored
+    return { token, label };
+  });
+
+  app.delete('/api/v1/auth/tokens/{id}', (req) => {
+    const user = requireUser(db, auth, req);
+    const row = db.prepare('SELECT * FROM tokens WHERE id = ?').get(req.params.id);
+    if (!row || row.user_id !== user.id) throw notFound();
+    db.prepare('DELETE FROM tokens WHERE id = ?').run(req.params.id);
+    return { ok: true };
+  });
+
   // ------------------------------------------------------------ tags
   app.get('/api/v1/tags', (req) => {
     const user = requireUser(db, auth, req);
