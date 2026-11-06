@@ -114,3 +114,12 @@
 - 登录页重构：邮箱验证码 / 扩展登录 / 令牌（高级）三入口。
 - 回归测试 3 项（56/56）；Playwright E2E 全流程零 JS 错误（08-auth-guest-merge.png）。
 - 已部署 schedule.xmnup.com：/auth/meta 确认 emailLogin:true、domains=[ringcentral.com]、devFallback（待 RESEND_API_KEY 置换为邮件发送）。
+
+## 2026-11-06 · 鉴权收敛轮（完成，62/62 测试，已部署）
+
+- 生产硬边界：无 RESEND_API_KEY 时邮箱登录明确不可用（拒发生在生成/存储任何验证码之前）；开发回退仅显式 SCHEDULE_AUTH_DEV_FALLBACK=1。
+- 访客 = 草稿边界：访客任务不可启用（activation 400）、Runner 永不调度（occurrences=0）、凭据绑定被阻断（400）；合并仅迁移草稿/未启用任务（无真实执行记录来源——访客本来被禁止执行）。
+- 会话轮换：邮箱/PAT/桥任一登录方式销毁此前呈现的会话（旧 cookie 401）。
+- 登录桥契约（与 E-184 单一接口）：页面以访客会话注册一次性 nonce（/auth/bridge/register）→ 扩展校验页面来源后携 PAT+nonce 调 /auth/bridge/exchange → 服务端单次消费 nonce、PAT 必需、轮换会话；PAT 不进页面 JS；受信 HTTPS 前保持禁用（/auth/meta.loginBridge.enabled=false，UI 按钮如实禁用）。
+- 回归证据（9 项 auth 测试）：生产拒绝且零验证码入库、验证码并发重放仅一次成功、会话轮换、既有账号登录不重复建号且重复登录不重复任务、访客三重阻断、迁移前 NULL token_id 会话吊销例外。
+- 部署验证：/auth/meta（devFallback:false、loginBridge.enabled:false）、邮箱请求拒绝文案、桥拒绝、访客任务 inactive、凭据绑定阻断。
