@@ -605,3 +605,33 @@ test('single-device binding an email owned by ANOTHER account is refused (no sil
     assert.equal(count, 1, 'no duplicate account created');
   } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
 });
+
+
+test('in-place binding respects the attempt limit (5 wrong codes exhaust the row; the correct code no longer binds)', async () => {
+  const ctx = await fresh();
+  try {
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookie = g.headers['set-cookie'][0].split(';')[0];
+    __config.authDevFallback = true;
+    await ctx.req('POST', '/api/v1/auth/email/request', { cookie, body: { email: 'attempt.limit@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash, attempts FROM login_codes WHERE email = ?').get('attempt.limit@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let real = null;
+    for (let i = 100000; i <= 999999 && !real; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) real = String(i);
+    }
+    const limit = __config.authCodeMaxAttempts || 5;
+    for (let i = 0; i < limit; i += 1) {
+      const wrong = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie, body: { email: 'attempt.limit@ringcentral.com', code: '000000' } });
+      assert.equal(wrong.statusCode, 400, 'each wrong attempt is rejected');
+    }
+    const spent = ctx.db.prepare('SELECT attempts FROM login_codes WHERE email = ?').get('attempt.limit@ringcentral.com');
+    assert.equal(spent.attempts, limit, 'attempt counter exhausted');
+    // the now-correct code must ALSO be refused and must NOT bind
+    const correct = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie, body: { email: 'attempt.limit@ringcentral.com', code: real } });
+    assert.equal(correct.statusCode, 400, 'correct code refused after the attempt limit');
+    assert.notEqual((await correct.json()).inPlace, true, 'no binding happened');
+    const stillGuest = ctx.db.prepare('SELECT is_guest FROM users WHERE id = ?').get((await g.json()).id);
+    assert.equal(stillGuest.is_guest, 1, 'account stays single-device');
+  } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
+});

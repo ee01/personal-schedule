@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, publicBaseUrl } from './config.js';
+const __attemptsLimit = () => config.authCodeMaxAttempts || 5;
 import {
   requireUser, bearerToken,
 } from './auth.js';
@@ -204,6 +205,10 @@ function describeRole(type, cfg) {
         db.prepare('UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?').run(normEmail);
         throw badRequest('验证码错误');
       }
+      // attempt-limit parity with verifyEmailCode (retest failure): after the
+      // 5th wrong attempt the code row is dead — the 6th (correct) attempt
+      // must be rejected, not used to complete the binding
+      if (row.attempts >= __attemptsLimit()) throw badRequest('尝试次数过多，请重新获取验证码');
       db.prepare('DELETE FROM login_codes WHERE email = ?').run(normEmail);
       const merged = auth.upgradeGuestToEmail(current.id, normEmail);
       rotateSession(req, res, current.id, null); // same userId, fresh session
