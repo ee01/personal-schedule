@@ -296,6 +296,7 @@ function renderDrawer() {
   const host = $('#layer');
   if (!host.dataset.ready) { host.innerHTML = '<div id="drawerLayer"></div><div id="modalLayer"></div>'; host.dataset.ready = 1; }
   $('#drawerLayer').innerHTML = DETAIL ? `<div class="scrim" data-act="closeDrawer"></div><aside class="drawer" role="dialog" aria-modal="true">${drawerHTML()}</aside>` : '';
+  wireDrawer();
 }
 function renderLayer() {
   const L = $('#layer');
@@ -524,6 +525,48 @@ function pageShares() {
   const empty = '<div class="empty"><div class="e-t">还没有分享</div><div class="e-s">到左侧分组里选择一个 Tag，点击「分享整包」。</div></div>';
   $('#view').innerHTML = '<div class="page-h"><h2>分享管理</h2><button class="btn primary sm" id="btnNewShare">分享一个 Tag</button></div>' + (rows || empty);
 }
+async function loadChain(id, occurrenceKey) {
+  const box = $('#chainBox'); if (!box) return;
+  box.textContent = '追问链加载中…';
+  const q = occurrenceKey ? `?includeHistory=1&occurrenceKey=${encodeURIComponent(occurrenceKey)}` : '?includeHistory=1';
+  const r = await api(`/tasks/${id}/chain${q}`);
+  if (!r.body.available) { box.innerHTML = '<div class="empty" style="padding:18px">' + esc(r.body.reason || '暂无追问链数据') + '</div>'; return; }
+  const list = r.body.sessions && r.body.sessions.items ? r.body.sessions.items : (r.body.sessions || []);
+  box.innerHTML = list.map((sess) => {
+    const hist = (sess.events || []).map((e) => '<div class="muted" style="font-size:12px">· ' + esc(e.type) + (e.detail ? ' · ' + esc(JSON.stringify(e.detail).slice(0, 60)) : '') + '</div>').join('');
+    let h = '<div class="content-box"><div class="row"><b>' + esc(sess.renderedQuestion || sess.id) + '</b><span class="pill ' + (sess.status || '') + '">' + esc(sess.status || '') + '</span>'
+      + (sess.followupCount !== undefined ? '<span class="muted">第 ' + (sess.followupCount + 1) + '/' + ((sess.maxFollowup || 0) + 1) + ' 轮</span>' : '') + '<span class="spacer"></span></div>' + hist;
+    // “追问上限 +2”仅等待状态展示；成功后刷新为当前会话与原历史源，不标记“已发送”
+    if (sess.status === 'waiting_reply' || sess.status === 'deferred') {
+      h += '<div class="row" style="margin-top:8px"><button class="btn sm" data-limit="' + sess.id + '" data-max="' + (sess.maxFollowup || 0) + '">追问上限 +2（不立即发送）</button>'
+        + '<span class="muted" id="limit-note-' + sess.id + '"></span></div>';
+    }
+    return h + '</div>';
+  }).join('') || '<div class="empty" style="padding:18px">暂无追问链数据</div>';
+  // bind the +2 buttons: requestId per click, reused for this click's retries; 409 → refresh + prompt, no auto-retry
+  $$('#chainBox [data-limit]').forEach((b) => b.onclick = async () => {
+    const sessionId = b.dataset.limit;
+    const expected = Number(b.dataset.max);
+    const reqId = 'fl-' + uuid();
+    b.disabled = true;
+    const note = $('#limit-note-' + sessionId);
+    const r = await api(`/tasks/${DETAIL.task.id}/chain/actions`, { method: 'POST', body: { action: 'increase_followup_limit', sessionId, requestId: reqId, expectedMaxFollowup: expected } });
+    b.disabled = false;
+    if (r.status === 200 && r.body.forwarded) {
+      toast('追问上限已 +2（不立即发送）', 'ok');
+      loadChain(id, occurrenceKey);
+      return;
+    }
+    if (r.body.conflict) {
+      if (note) note.textContent = '状态或上限已变化，已刷新——请再次点击以新的上限继续';
+      loadChain(id, occurrenceKey);
+      toast('追问上限未生效：会话状态或上限已变化，请刷新后再试', 'warn', { stay: 8000 });
+      return;
+    }
+    if (note) note.textContent = '请求失败：' + ((r.body.body && r.body.body.error) || r.status);
+  });
+}
+
 let SF = null;
 function shareModalHTML() {
   return `<div class="modal-wrap"><div class="scrim" data-act="closeSf"></div><div class="modal sm" role="dialog"><div class="mhead"><h3>分享整包</h3><button class="btn ghost icon" data-act="closeSf">${ic('close')}</button></div>
@@ -563,7 +606,7 @@ function wire() {
 }
 function wireDrawer() {
   $$('#drawerLayer [data-act="closeDrawer"]').forEach((b) => b.onclick = closeDrawer);
-  $$('#drawerLayer [data-dtab]').forEach((b) => b.onclick = () => { DETAIL.tab = b.dataset.dtab; renderDrawer(); });
+  $$('#drawerLayer [data-dtab]').forEach((b) => b.onclick = async () => { DETAIL.tab = b.dataset.dtab; renderDrawer(); if (DETAIL.tab === 'chain' && DETAIL.task) loadChain(DETAIL.task.id, DETAIL.chainKey); });
   $$('#drawerLayer [data-op]').forEach((b) => b.onclick = () => drawerAction(DETAIL.task.id, b.dataset.op));
   $$('#drawerLayer [data-rmtag]').forEach((b) => b.onclick = () => toggleTag(DETAIL.task.id, b.dataset.rmtag, false));
   $$('#drawerLayer [data-addtag]').forEach((b) => b.onclick = () => {

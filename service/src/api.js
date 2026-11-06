@@ -560,20 +560,38 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
       cancel_session: `/api/v1/outreach/sessions/${sessionId}/cancel`,
       continue_followup: `/api/v1/outreach/sessions/${sessionId}/continue-followup`,
       retry_session: `/api/v1/outreach/sessions/${sessionId}/retry`,
+      increase_followup_limit: `/api/v1/outreach/sessions/${sessionId}/increase-followup-limit`,
     };
     if (action === 'cancel_run') {
       return { supported: false, reason: 'in-flight run cancellation is pending executor-side verification (3.5 取消)；已提交的 Multica run 需到 Multica 侧处理' };
     }
     const route = routes[action];
     if (!route) throw badRequest(`unknown action: ${action}`);
+    // increase_followup_limit (E-184 68425cfc): forward {requestId,
+    // expectedMaxFollowup}; the requestId is generated per click and reused
+    // across retries of THIS click, never rotated on a 409 — the user must
+    // refresh and explicitly click again.
+    let forwardBody = '{}';
+    if (action === 'increase_followup_limit') {
+      const { requestId, expectedMaxFollowup } = req.body || {};
+      if (!Number.isSafeInteger(expectedMaxFollowup) || expectedMaxFollowup < 0) {
+        throw badRequest('expectedMaxFollowup must be a non-negative integer');
+      }
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(requestId || ''))) {
+        throw badRequest('invalid requestId (16-128 chars)');
+      }
+      forwardBody = JSON.stringify({ requestId, expectedMaxFollowup });
+    }
     const response = await fetch(`${base}${route}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${memory.userKey}`, 'Content-Type': 'application/json' },
-      body: '{}',
+      body: forwardBody,
       signal: AbortSignal.timeout(config.httpTimeoutMs),
     });
     const payload = await response.text();
-    return { forwarded: response.ok, status: response.status, body: parseJson(payload, payload.slice(0, 500)) };
+    // surface 409 as an explicit conflict signal: the client refreshes and
+    // lets the user click again with a fresh requestId; never auto-retries
+    return { forwarded: response.ok, status: response.status, conflict: response.status === 409, body: parseJson(payload, payload.slice(0, 500)) };
   });
 
   // ------------------------------------------------------------ connections
