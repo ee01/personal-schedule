@@ -1,0 +1,15 @@
+{
+  "name": "personal-schedule-service",
+  "version": "0.1.0",
+  "description": "Personal Schedule — independent scheduled task product: web management, service, persistent runner, multi-executor dispatch, tag sharing.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=23.4"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test 'test/*.test.js'",
+    "cli": "node src/cli.js"
+  }
+}

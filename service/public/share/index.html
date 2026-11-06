@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personal Schedule · 分享</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1c2333;--muted:#6b7280;--line:#e5e8f0;--brand:#4f46e5;--ok:#059669;--warn:#d97706;--bad:#dc2626}
+*{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:960px;margin:0 auto;padding:32px 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.task{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;background:#fff}
+.task input[type=checkbox]{margin-top:4px;width:16px;height:16px}
+.task .t-title{font-weight:600}.task .t-meta{color:var(--muted);font-size:12px;margin-top:2px}
+.tag{display:inline-block;background:#eef0ff;color:var(--brand);border-radius:6px;padding:1px 8px;font-size:12px;margin-right:6px}
+.sensitive{background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 8px;font-size:12px}
+button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:14px;cursor:pointer}
+button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=password],select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:#fff}
+.result{padding:10px;border-radius:8px;margin-top:8px;font-size:13px}
+.result.ok{background:#ecfdf5;color:#065f46}.result.err{background:#fef2f2;color:#991b1b}.result.warn{background:#fffbeb;color:#92400e}
+.hint{font-size:12px;color:var(--muted)}
+#ext-banner{display:none;background:#eef0ff;border:1px solid #c7ccf5;color:#3730a3;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="ext-banner"></div>
+  <div id="share"></div>
+</div>
+<script>
+const state = { token: location.pathname.split('/').pop(), data: null, session: null };
+const api = (path, opts) => fetch(`/api/v1${path}`, {
+  headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...opts,
+}).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+function fmtSpec(spec){
+  if(!spec) return '';
+  if(spec.kind==='one_shot') return `单次 · ${new Date(spec.dateTime*1000).toLocaleString()}`;
+  if(spec.kind==='cron') return `CRON · ${spec.expr} (${spec.timezone||''})`;
+  if(spec.kind==='rate') return `每 ${spec.intervalMinutes} 分钟`;
+  if(spec.kind==='timeline') return `Timeline · ${esc(spec.project)} / ${esc(spec.milestone)} ${spec.offsetDays>0?'+':''}${spec.offsetDays||0}天 ${spec.time}`;
+  return spec.kind;
+}
+
+async function loadShare(){
+  const { status, body } = await api(`/shares/${state.token}`);
+  if (status !== 200) { document.getElementById('share').innerHTML = `<div class="card"><h1>分享不可用</h1><div class="sub">${esc(body.error||'链接已失效')}</div></div>`; return; }
+  state.data = body;
+  const me = await api('/me');
+  state.session = me.status === 200 ? me.body : null;
+  render();
+}
+
+function render(){
+  const d = state.data;
+  const tasksHtml = d.tasks.map((t, i) => `
+    <label class="task">
+      <input type="checkbox" data-i="${i}" checked>
+      <div>
+        <div class="t-title">${esc(t.title)} <span class="tag">${t.type}</span>${t.sensitivity?`<span class="sensitive">⚠ 敏感内容</span>`:''}</div>
+        <div class="t-meta">${esc(fmtSpec(t.scheduleSpec))}</div>
+        <div class="t-meta">${esc((t.content||'').slice(0,140))}</div>
+      </div>
+    </label>`).join('');
+  document.getElementById('share').innerHTML = `
+    <div class="card">
+      <h1>「${esc(d.sourceTagName)}」任务包</h1>
+      <div class="sub">实时视图 · ${d.tasks.length} 个任务 · 分组变化会实时反映在本页 · 导入后为你的独立副本（不含发送方凭证/历史）</div>
+      ${state.session?'':`<div class="hint" style="margin-bottom:10px">导入需要你的 Personal Schedule 身份：先在下方登录（或在已安装的 Personal AI 扩展中导入）。</div>`}
+      <div class="row" style="margin-bottom:14px">
+        ${state.session
+          ? `<span class="hint">已登录：${esc(state.session.email)}</span>`
+          : `<input type="password" id="login-token" placeholder="你的 Schedule API Token" style="flex:1;min-width:240px">
+             <button class="ghost" id="login-btn">登录</button>`}
+      </div>
+      ${tasksHtml}
+      <div class="row" style="margin-top:14px">
+        <button id="import-btn" ${state.session?'':'disabled'}>导入选中任务</button>
+        <span class="hint" id="import-hint"></span>
+      </div>
+      <div id="import-result"></div>
+    </div>`;
+  if (!state.session) document.getElementById('login-btn').onclick = async () => {
+    const token = document.getElementById('login-token').value.trim();
+    const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ token }) });
+    if (r.status === 200) loadShare(); else alert('Token 无效');
+  };
+  document.getElementById('import-btn').onclick = doImport;
+}
+
+async function doImport(){
+  const selected = [...document.querySelectorAll('input[data-i]:checked')].map((el) => state.data.tasks[+el.dataset.i].refKey);
+  if (selected.length === 0) { alert('请至少勾选一个任务'); return; }
+  const requestId = 'imp-' + crypto.randomUUID();
+  let r = await api(`/shares/${state.token}/import`, { method: 'POST', body: JSON.stringify({ selected, requestId }) });
+  if (r.body.needConfirm) {
+    if (!confirm(`以下任务你已导入过：\n${r.body.duplicates.map((t)=>t.title).join('\n')}\n\n再次导入将创建额外副本，确定？`)) return;
+    r = await api(`/shares/${state.token}/import`, { method: 'POST', body: JSON.stringify({ selected, requestId: requestId + '-c', confirmDuplicates: true }) });
+  }
+  const out = document.getElementById('import-result');
+  if (r.status === 200) {
+    const rows = r.body.results.map((res) => `<div class="result ${res.status==='failed'?'err':'ok'}">${res.status==='failed'?'❌ 失败：'+esc(res.reason):'✅ 已导入（默认未启用，请到「需要补全」中绑定收件人/执行器后启用）'}</div>`).join('');
+    out.innerHTML = rows + `<div class="hint" style="margin-top:8px">导入的任务为独立副本，不随本分享变化。到 <a href="/app">Personal Schedule</a> 的「需要补全」中完成配置。</div>`;
+  } else {
+    out.innerHTML = `<div class="result err">导入失败：${esc(r.body.error||r.status)}</div>`;
+  }
+}
+
+// extension handshake (H9): the Personal AI extension announces itself; the
+// page passes the share token for a continuation import after install.
+window.addEventListener('message', (event) => {
+  if (event.data?.channel !== 'personal-schedule') return;
+  document.getElementById('ext-banner').style.display = 'block';
+  document.getElementById('ext-banner').textContent = '已检测到 Personal AI 扩展，可通过扩展一键导入本任务包。';
+  event.source.postMessage({ channel: 'personal-schedule', type: 'share-page', shareToken: state.token, schemaVersion: state.data?.schemaVersion }, '*');
+});
+window.__PERSONAL_SCHEDULE__ = { product: 'personal-schedule', version: '0.1.0', getShareToken: () => state.token };
+loadShare();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="主导航"></aside>
+  <main class="main">
+    <header class="topbar">
+      <button class="btn ghost icon menu-toggle" id="menuToggle" aria-label="打开导航"></button>
+      <div class="crumb" id="crumb"></div>
+      <label class="search" id="searchBox">
+        <span data-icon="search"></span>
+        <span class="sr-only">搜索任务</span>
+        <input id="search" type="search" placeholder="搜索标题、内容、收件人、Tag…" autocomplete="off">
+        <kbd>/</kbd>
+      </label>
+      <span class="demo-flag" title="所有数据为前端模拟，不会真实发送或执行">● 演示数据 · 不会真实发送</span>
+    </header>
+    <div class="view scroll" id="view" tabindex="-1"></div>
+  </main>
+</div>
+<div id="layer"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div class="console" id="console"></div>
+<script>

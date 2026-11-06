@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personal Schedule</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1c2333;--muted:#6b7280;--line:#e5e8f0;--brand:#4f46e5;--brand-soft:#eef0ff;--ok:#059669;--ok-soft:#ecfdf5;--warn:#d97706;--warn-soft:#fffbeb;--bad:#dc2626;--bad-soft:#fef2f2}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+a{color:var(--brand);text-decoration:none}
+.topbar{background:#fff;border-bottom:1px solid var(--line);padding:10px 20px;display:flex;gap:18px;align-items:center;position:sticky;top:0;z-index:10}
+.topbar .logo{font-weight:700;font-size:16px}
+.topbar nav a{color:var(--muted);padding:6px 10px;border-radius:8px}
+.topbar nav a.active{color:var(--brand);background:var(--brand-soft)}
+.topbar .spacer{flex:1}
+.wrap{max-width:1080px;margin:24px auto;padding:0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=password],input[type=number],input[type=datetime-local],select,textarea{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;background:#fff;font-family:inherit}
+textarea{width:100%;min-height:70px}
+button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+button.small{padding:4px 10px;font-size:12.5px}
+button.danger{background:var(--bad)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.pill{display:inline-block;border-radius:999px;padding:1px 10px;font-size:12px}
+.pill.active{background:var(--ok-soft);color:var(--ok)}
+.pill.paused{background:#f1f5f9;color:#475569}
+.pill.inactive{background:var(--warn-soft);color:var(--warn)}
+.pill.needs_attention{background:var(--bad-soft);color:var(--bad)}
+.tag{display:inline-block;background:var(--brand-soft);color:var(--brand);border-radius:6px;padding:1px 8px;font-size:12px;margin-right:6px;cursor:pointer}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:top}
+th{color:var(--muted);font-weight:500}
+.viewtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.viewtabs .vt{padding:5px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);cursor:pointer;font-size:13px;color:var(--muted)}
+.viewtabs .vt.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100vw);background:#fff;box-shadow:-8px 0 30px rgba(0,0,0,.08);overflow-y:auto;padding:24px;transform:translateX(100%);transition:.2s;z-index:20}
+.drawer.open{transform:none}
+.backdrop{position:fixed;inset:0;background:rgba(15,23,42,.25);display:none;z-index:15}
+.backdrop.show{display:block}
+h2{font-size:17px;margin:0 0 10px}
+h3{font-size:14px;margin:18px 0 6px;color:var(--muted)}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+.field input,.field select{width:100%}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.muted{color:var(--muted);font-size:12.5px}
+.run{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:13px}
+.badge{font-size:12px;border-radius:6px;padding:1px 8px}
+.badge.pub-published{background:var(--ok-soft);color:var(--ok)}
+.badge.pub-paused{background:var(--warn-soft);color:var(--warn)}
+.badge.pub-skipped{background:#f1f5f9;color:#64748b}
+.badge.pub-pending{background:var(--brand-soft);color:var(--brand)}
+.badge.none{background:#f1f5f9;color:#94a3b8}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="backdrop" id="backdrop"></div>
+<div class="drawer" id="drawer"></div>
+
+<script>
+const S = { user: null, view: 'tasks', sub: 'all', tasks: [], tags: [], shares: [], q: '', detail: null };
+const api = (path, opts) => fetch(`/api/v1${path}`, {
+  headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...opts,
+}).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+const esc = (s) => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+const $ = (sel, el = document) => el.querySelector(sel);
+const TYPE_LABEL = { asme: '以我发送', bot: 'Bot 发送', ai_report: 'AI Report', outreach: '帮我问', agent_task: '帮我做', jira_automation: 'JIRA 托管' };
+
+async function boot() {
+  const me = await api('/me');
+  if (me.status === 200) { S.user = me.body; render(); }
+  else renderLogin();
+}
+function renderLogin() {
+  $('#app').innerHTML = `
+  <div class="wrap" style="max-width:420px;margin-top:12vh">
+    <div class="card">
+      <h2>Personal Schedule</h2>
+      <div class="muted" style="margin-bottom:12px">输入你的 API Token 登录（Personal AI 扩展配置同一 Token）。</div>
+      <div class="field"><input type="password" id="tok" placeholder="pst_..."></div>
+      <button id="go">登录</button>
+    </div>
+  </div>`;
+  const go = async () => {
+    const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ token: $('#tok').value.trim() }) });
+    if (r.status === 200) { S.user = r.body.user; render(); } else alert('Token 无效');
+  };
+  $('#go').onclick = go;
+  $('#tok').onkeydown = (e) => e.key === 'Enter' && go();
+}
+
+async function refresh() {
+  const [tasks, tags, shares] = await Promise.all([api('/tasks'), api('/tags'), api('/shares')]);
+  S.tasks = tasks.body || []; S.tags = tags.body || []; S.shares = shares.body || [];
+}
+
+function render() {
+  if (!S.user) return renderLogin();
+  const nav = `
+  <div class="topbar">
+    <span class="logo">📅 Personal Schedule</span>
+    <nav>
+      <a data-v="tasks" class="${S.view==='tasks'?'active':''}">任务</a>
+      <a data-v="tags" class="${S.view==='tags'?'active':''}">标签</a>
+      <a data-v="shares" class="${S.view==='shares'?'active':''}">分享</a>
+      <a data-v="settings" class="${S.view==='settings'?'active':''}">设置</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="muted">${esc(S.user.email)}</span>
+    <button class="ghost small" id="logout">退出</button>
+  </div>`;
+  const pages = { tasks: pageTasks, tags: pageTags, shares: pageShares, settings: pageSettings };
+  $('#app').innerHTML = nav + `<div class="wrap">${pages[S.view]()}</div>`;
+  document.querySelectorAll('.topbar nav a').forEach((a) => a.onclick = () => { S.view = a.dataset.v; render(); });
+  $('#logout').onclick = async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); };
+  wire(S.view);
+}
+
+function viewTabs() {
+  const needBadge = S.tasks.filter((t) => t.status === 'inactive').length;
+  let tabs = `<div class="vt ${S.sub==='all'?'active':''}" data-s="all">全部</div>`;
+  for (const tag of S.tags) tabs += `<div class="vt ${S.sub==='tag:'+tag.id?'active':''}" data-s="tag:${tag.id}">#${esc(tag.name)}</div>`;
+  for (const type of ['asme','bot','ai_report','outreach','agent_task','jira_automation']) {
+    const count = S.tasks.filter((t) => t.type === type).length;
+    if (count) tabs += `<div class="vt ${S.sub==='type:'+type?'active':''}" data-s="type:${type}">${TYPE_LABEL[type]}</div>`;
+  }
+  tabs += `<div class="vt ${S.sub==='needs'?'active':''}" data-s="needs" style="color:${needBadge?'var(--warn)':''}">需要补全${needBadge?` (${needBadge})`:''}</div>`;
+  return `<div class="viewtabs">${tabs}</div>`;
+}
+
+function filteredTasks() {
+  let list = S.tasks;
+  if (S.sub.startsWith('tag:')) list = list.filter((t) => t.tags?.some((tag) => tag.id === S.sub.slice(4)));
+  else if (S.sub.startsWith('type:')) list = list.filter((t) => t.type === S.sub.slice(5));
+  else if (S.sub === 'needs') list = list.filter((t) => t.status === 'inactive');
+  if (S.q) { const q = S.q.toLowerCase(); list = list.filter((t) => (t.title + t.content).toLowerCase().includes(q)); }
+  return list;
+}
+
+function fmtNext(t) {
+  if (!t.next_run_at) return '—';
+  const d = new Date(t.next_run_at * 1000);
+  return d.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function pageTasks() {
+  const list = filteredTasks();
+  const rows = list.map((t) => `
+    <tr>
+      <td><a data-open="${t.id}" style="cursor:pointer"><b>${esc(t.title)}</b></a><div class="muted">${TYPE_LABEL[t.type]||t.type} · ${esc(t.title?'':'')}</div>
+        <div>${(t.tags||[]).map((g)=>`<span class="tag">#${esc(g.name)}</span>`).join('')}</div>
+        ${t.missing?.length?`<div class="muted" style="color:var(--warn)">待补全：${t.missing.map(esc).join('、')}</div>`:''}</td>
+      <td><span class="pill ${t.status}">${{active:'运行中',paused:'已暂停',inactive:'未启用',needs_attention:'需注意'}[t.status]||t.status}</span></td>
+      <td>${fmtNext(t)}</td>
+      <td style="white-space:nowrap">
+        ${t.status==='active'?`<button class="ghost small" data-pause="${t.id}">暂停</button>`:''}
+        ${['paused','inactive'].includes(t.status)?`<button class="small" data-enable="${t.id}">启用</button>`:''}
+        <button class="ghost small" data-del="${t.id}">删除</button>
+      </td>
+    </tr>`).join('');
+  return `
+  ${viewTabs()}
+  <div class="row" style="margin-bottom:12px">
+    <input type="text" id="q" placeholder="搜索任务…" value="${esc(S.q)}" style="flex:1;min-width:200px">
+    <button id="new-task">＋ 新建任务</button>
+  </div>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table><thead><tr><th>任务</th><th>状态</th><th>下次运行</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="4" class="muted" style="text-align:center;padding:30px">暂无任务</td></tr>'}</tbody></table>
+  </div>`;
+}
+
+function pageTags() {
+  return `
+  <div class="card">
+    <h2>标签（多对多分组）</h2>
+    <div class="muted" style="margin-bottom:12px">一个任务可属于多个标签；按任务类型切换只是视图，不复制任务。删除标签不删除任务。</div>
+    <div class="row" style="margin-bottom:14px"><input id="tag-name" placeholder="新标签名称"><button id="tag-add">添加</button></div>
+    <table><thead><tr><th>标签</th><th>任务数</th><th></th></tr></thead><tbody>
+    ${S.tags.map((t)=>`<tr><td>#${esc(t.name)}</td><td>${t.taskCount}</td>
+      <td>${t.taskCount?'':''}<button class="ghost small" data-share-tag="${t.id}">分享</button> <button class="ghost small danger" data-tag-del="${t.id}">删除</button></td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+
+function pageShares() {
+  return `
+  <div class="card">
+    <h2>我的分享</h2>
+    <div class="muted" style="margin-bottom:12px">分享是标签的<b>实时视图</b>：分组变化随时反映，无版本概念。导入方获得独立副本。撤销后链接立即失效，已导入副本不受影响。</div>
+    <table><thead><tr><th>分组</th><th>链接</th><th>导入人数</th><th>状态</th><th></th></tr></thead><tbody>
+    ${S.shares.map((s)=>`<tr>
+      <td>#${esc(s.sourceTagName)}</td>
+      <td><span class="muted">/share/${esc(s.token)}</span> <button class="ghost small" data-copy="${s.token}">复制</button></td>
+      <td>${s.importCount}</td>
+      <td>${s.revoked?'<span class="pill inactive">已撤销</span>':'<span class="pill active">已发布</span>'}</td>
+      <td>${s.revoked?'':`<button class="ghost small danger" data-revoke="${s.token}">撤销</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">暂无分享。到「标签」页选择一个标签进行分享。</td></tr>'}
+    </tbody></table>
+  </div>`;
+}
+
+function connForm(key, fields, hint) {
+  return `
+  <div class="card"><h2>${key}</h2><div class="muted" style="margin-bottom:10px">${hint}</div>
+    <div class="grid2">${fields.map((f)=>`<div class="field"><label>${f[0]}</label><input id="conn-${key}-${f[1]}" ${f[2]||''}></div>`).join('')}</div>
+    <div class="row"><button data-save-conn="${key}">保存</button><button class="ghost" data-test-conn="${key}">测试连接</button><span class="muted" id="conn-result-${key}"></span></div>
+  </div>`;
+}
+
+function pageSettings() {
+  return `
+  <h2>连接</h2>
+  ${connForm('rc_user', [['RC Server', 'serverUrl', 'value=https://platform.ringcentral.com'], ['用户 JWT Token', 'token', ''], ['我的 ChatId（通知收件）', 'ownChatId', '']], '以我的身份发帖（AsMe）与个人运行通知。Token 过期后需重新授权。')}
+  ${connForm('rc_bot', [['RC Server', 'serverUrl', 'value=https://platform.ringcentral.com'], ['Bot Client ID', 'clientId', ''], ['Bot Client Secret', 'clientSecret', ' type=password']], 'Bot 发帖使用 Client Credentials 自动获取 token，保存在服务端。')}
+  ${connForm('memory', [['Base URL', 'baseUrl', 'value=http://127.0.0.1:3210'], ['个人 User Key (pak.*)', 'userKey', ' type=password']], '帮我问/帮我做经 memory-service 执行；填写你的个人 key（禁止服务总 key）。')}
+  ${connForm('multica', [['Webhook URL', 'webhookUrl', ' placeholder=https://…/api/webhooks/autopilots/…'], ['Binding UUID', 'bindingUuid', '']], '帮我做(Multica) 到期直接 POST Autopilot webhook；幂等键 pai:{binding}:{execution}。')}
+  ${connForm('jira', [['Base URL', 'baseUrl', ''], ['Token', 'token', ' type=password']], 'AI Report 的 JQL 数据源。')}
+  <div class="card">
+    <h2>Timeline 数据源（部署级）</h2>
+    <div class="muted" style="margin-bottom:10px">Release Info 拉取地址（可用 {project} 占位）。刷新间隔分钟（默认 1440，H13 待验证）、宽限窗口小时（默认 6）。</div>
+    <div class="grid2">
+      <div class="field"><label>sourceUrl</label><input id="set-timeline.sourceUrl"></div>
+      <div class="field"><label>refreshMinutes</label><input id="set-timeline.refreshMinutes" type="number"></div>
+      <div class="field"><label>graceHours</label><input id="set-timeline.graceHours" type="number"></div>
+    </div>
+    <div class="row"><button id="save-timeline">保存</button><button class="ghost" id="refresh-timeline">立即刷新</button><span class="muted" id="timeline-result"></span></div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------- actions
+
+function wire(view) {
+  if (view === 'tasks') {
+    document.querySelectorAll('.viewtabs .vt').forEach((v) => v.onclick = () => { S.sub = v.dataset.s; render(); });
+    $('#q').oninput = (e) => { S.q = e.target.value; const el = e.target; render(); $('#q').value = el.value; $('#q').focus(); };
+    $('#new-task').onclick = openCreate;
+    document.querySelectorAll('[data-open]').forEach((a) => a.onclick = () => openDetail(a.dataset.open));
+    document.querySelectorAll('[data-pause]').forEach((b) => b.onclick = async () => { await api(`/tasks/${b.dataset.pause}/status`, { method: 'POST', body: JSON.stringify({ status: 'paused' }) }); await reload(); });
+    document.querySelectorAll('[data-enable]').forEach((b) => b.onclick = async () => {
+      const r = await api(`/tasks/${b.dataset.enable}/status`, { method: 'POST', body: JSON.stringify({ status: 'active' }) });
+      if (r.status !== 200) alert('无法启用：' + (r.body.error || '') + (r.body.missing ? '\n缺少：' + r.body.missing.join('、') : ''));
+      await reload();
+    });
+    document.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => { if (confirm('删除该任务？')) { await api(`/tasks/${b.dataset.del}`, { method: 'DELETE' }); await reload(); } });
+  }
+  if (view === 'tags') {
+    $('#tag-add').onclick = async () => { const name = $('#tag-name').value.trim(); if (name) { await api('/tags', { method: 'POST', body: JSON.stringify({ name }) }); await reload(); } };
+    document.querySelectorAll('[data-tag-del]').forEach((b) => b.onclick = async () => { if (confirm('删除标签？（任务保留）')) { await api(`/tags/${b.dataset.tagDel}`, { method: 'DELETE' }); await reload(); } });
+    document.querySelectorAll('[data-share-tag]').forEach((b) => b.onclick = async () => {
+      const r = await api(`/tags/${b.dataset.shareTag}/share`, { method: 'POST', body: '{}' });
+      if (r.status === 200) { S.view = 'shares'; await reload(); } else alert('分享失败：' + (r.body.error || ''));
+    });
+  }
+  if (view === 'shares') {
+    document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => navigator.clipboard.writeText(location.origin + '/share/' + b.dataset.copy));
+    document.querySelectorAll('[data-revoke]').forEach((b) => b.onclick = async () => { if (confirm('撤销后链接立即失效，确定？')) { await api(`/shares/${b.dataset.revoke}/revoke`, { method: 'POST' }); await reload(); } });
+  }
+  if (view === 'settings') {
+    document.querySelectorAll('[data-save-conn]').forEach((b) => b.onclick = async () => saveConn(b.dataset.saveConn, false));
+    document.querySelectorAll('[data-test-conn]').forEach((b) => b.onclick = async () => saveConn(b.dataset.testConn, true));
+    $('#save-timeline').onclick = saveTimeline;
+    $('#refresh-timeline').onclick = async () => { const r = await api('/timeline/refresh', { method: 'POST', body: '{}' }); $('#timeline-result').textContent = JSON.stringify(r.body); };
+    loadSettings();
+  }
+}
+
+async function saveConn(key, test) {
+  const ids = { rc_user: ['serverUrl','token','ownChatId'], rc_bot: ['serverUrl','clientId','clientSecret'], memory: ['baseUrl','userKey'], multica: ['webhookUrl','bindingUuid'], jira: ['baseUrl','token'] };
+  const value = {};
+  for (const f of ids[key]) { const el = $(`#conn-${key}-${f}`); if (el) value[f] = el.value.trim(); }
+  if (!test) {
+    const r = await api(`/connections/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
+    $(`#conn-result-${key}`).textContent = r.status === 200 ? '已保存' : '保存失败';
+  }
+  const r2 = await api(`/connections/${key}/test`, { method: 'POST', body: JSON.stringify({ value }) });
+  $(`#conn-result-${key}`).textContent = r2.body.ok === true ? `连接正常 ${r2.body.detail ? JSON.stringify(r2.body.detail) : ''}` : `失败：${r2.body.error || '未知'}`;
+}
+
+async function loadSettings() {
+  const r = await api('/settings');
+  for (const [k, v] of Object.entries(r.body || {})) { const el = $(`#set-${k}`); if (el) el.value = v; }
+}
+
+async function saveTimeline() {
+  for (const k of ['sourceUrl','refreshMinutes','graceHours']) {
+    const el = $(`#set-timeline.${k}`); if (el && el.value) await api(`/settings/timeline.${k}`, { method: 'PUT', body: JSON.stringify({ value: el.value }) });
+  }
+  $('#timeline-result').textContent = '已保存';
+}
+
+async function reload() { await refresh(); render(); }
+
+// ---------------------------------------------------------------- create
+
+function openCreate() {
+  const tagsHtml = S.tags.map((t) => `<label style="margin-right:10px"><input type="checkbox" class="ct" value="${t.id}"> #${esc(t.name)}</label>`).join('');
+  $('#drawer').innerHTML = `
+  <h2>新建任务</h2>
+  <div class="field"><label>类型</label>
+    <select id="c-type">${Object.entries(TYPE_LABEL).filter(([k])=>k!=='jira_automation').map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+  <div class="field"><label>标题</label><input id="c-title"></div>
+  <div class="field"><label>内容 / 执行指令（只描述要做什么，收件人与格式在下方配置）</label><textarea id="c-content"></textarea></div>
+  <h3>时间</h3>
+  <div class="grid2">
+    <div class="field"><label>方式</label><select id="c-kind">
+      <option value="cron">按 CRON</option><option value="one_shot">单次</option><option value="rate">固定间隔</option><option value="timeline">Timeline（发布节点）</option></select></div>
+    <div class="field"><label>时区</label><input id="c-tz" value="Asia/Shanghai"></div>
+    <div class="field c-cron"><label>CRON（分 时 日 月 周，支持 6 段含秒）</label><input id="c-cron" value="30 9 * * *" placeholder="30 9 * * *"></div>
+    <div class="field c-one" style="display:none"><label>时间</label><input id="c-when" type="datetime-local"></div>
+    <div class="field c-rate" style="display:none"><label>间隔（分钟）</label><input id="c-rate" type="number" value="60"></div>
+    <div class="field c-timeline" style="display:none"><label>项目</label><input id="c-project" placeholder="mThor"></div>
+    <div class="field c-timeline" style="display:none"><label>里程碑</label><input id="c-milestone" placeholder="FF"></div>
+    <div class="field c-timeline" style="display:none"><label>偏移天数（±，发布日前为负）</label><input id="c-offset" type="number" value="-2"></div>
+    <div class="field c-timeline" style="display:none"><label>发送时刻</label><input id="c-time" value="09:30"></div>
+  </div>
+  <h3>投递对象（asme/bot/ai_report）</h3>
+  <div class="field"><label>Chat ID</label><input id="c-chat" placeholder="Glip chat id"></div>
+  <div class="agent-only" style="display:none">
+    <h3>执行与投递（帮我做）</h3>
+    <div class="grid2">
+      <div class="field"><label>执行器</label><select id="c-executor"><option value="memory">memory-service（OpenClaw/ACP/worker）</option><option value="multica">Multica Autopilot</option></select></div>
+      <div class="field"><label>模式</label><select id="c-mode"><option value="read">read（只读）</option><option value="write">write（可写）</option></select></div>
+    </div>
+    <div class="field"><label>运行通知 → 通知我</label><select id="c-notify"><option value="every">每次完成</option><option value="failures">仅失败</option><option value="off">关闭</option></select></div>
+    <div class="field"><label>发布任务产出 → 发送到群</label><select id="c-pub"><option value="off">关闭（默认）</option><option value="final_output">直接发送最终产出</option><option value="template">按模板生成</option></select></div>
+    <div class="field" id="c-pub-recipients-wrap" style="display:none"><label>发布对象 Chat ID（逗号分隔）</label><input id="c-pub-recipients"></div>
+    <div class="field" id="c-pub-template-wrap" style="display:none"><label>模板字段（每行：名称 | 给执行器的说明 | 必填y/n）</label><textarea id="c-pub-template">标题 | 一句话标题 | y\n风险 | 风险点 | y\n备注 | 可选补充 | n</textarea></div>
+  </div>
+  <h3>标签</h3><div>${tagsHtml || '<span class="muted">暂无标签</span>'}</div>
+  <div class="row" style="margin-top:16px"><button id="c-save">创建</button><button class="ghost" id="c-cancel">取消</button><span class="muted" id="c-err"></span></div>`;
+  $('#backdrop').classList.add('show'); $('#drawer').classList.add('open');
+  const syncKind = () => {
+    const kind = $('#c-kind').value;
+    for (const k of ['cron','one','rate','timeline']) document.querySelectorAll(`.c-${k}`).forEach((el) => el.style.display = k === kind || (k==='cron'&&kind==='cron') ? '' : 'none');
+    document.querySelectorAll('.c-cron').forEach((el)=>el.style.display = kind==='cron'?'':'none');
+    document.querySelectorAll('.c-one').forEach((el)=>el.style.display = kind==='one_shot'?'':'none');
+    document.querySelectorAll('.c-rate').forEach((el)=>el.style.display = kind==='rate'?'':'none');
+    document.querySelectorAll('.c-timeline').forEach((el)=>el.style.display = kind==='timeline'?'':'none');
+  };
+  $('#c-kind').onchange = syncKind; syncKind();
+  const syncType = () => {
+    const t = $('#c-type').value;
+    document.querySelectorAll('.agent-only').forEach((el)=>el.style.display = t==='agent_task'?'':'none');
+  };
+  $('#c-type').onchange = syncType; syncType();
+  $('#c-cancel').onclick = closeDrawer;
+  $('#c-save').onclick = doCreate;
+}
+
+function closeDrawer() { $('#drawer').classList.remove('open'); $('#backdrop').classList.remove('show'); }
+$('#backdrop').onclick = closeDrawer;
+
+async function doCreate() {
+  const type = $('#c-type').value;
+  const kind = $('#c-kind').value;
+  const tz = $('#c-tz').value || 'Asia/Shanghai';
+  let scheduleSpec;
+  if (kind === 'cron') scheduleSpec = { kind, expr: $('#c-cron').value, timezone: tz };
+  else if (kind === 'one_shot') scheduleSpec = { kind, dateTime: Math.floor(new Date($('#c-when').value).getTime() / 1000), timezone: tz };
+  else if (kind === 'rate') scheduleSpec = { kind, intervalMinutes: Number($('#c-rate').value) };
+  else scheduleSpec = { kind, project: $('#c-project').value, milestone: $('#c-milestone').value, offsetDays: Number($('#c-offset').value), time: $('#c-time').value, timezone: tz };
+  const config = {};
+  if (['asme','bot'].includes(type)) config.chatId = $('#c-chat').value;
+  if (type === 'agent_task') { config.executor = $('#c-executor').value; config.mode = $('#c-mode').value; }
+  const notify = {};
+  if (type === 'agent_task') {
+    notify.notifyMe = { mode: $('#c-notify').value };
+    const pub = $('#c-pub').value;
+    notify.publish = pub === 'off' ? { enabled: false } : {
+      enabled: true,
+      recipients: ($('#c-pub-recipients').value || '').split(',').map((s) => s.trim()).filter(Boolean).map((chatId) => ({ chatId })),
+      identity: 'user',
+      source: pub,
+      template: pub === 'template'
+        ? $('#c-pub-template').value.split('\n').map((line) => { const [name, note, req] = line.split('|').map((s) => (s || '').trim()); return name ? { name, note, required: req !== 'n' } : null; }).filter(Boolean)
+        : [],
+    };
+  }
+  const tagIds = [...document.querySelectorAll('.ct:checked')].map((el) => el.value);
+  const body = { type, title: $('#c-title').value, content: $('#c-content').value, scheduleSpec, config, notify, tagIds };
+  const r = await api('/tasks', { method: 'POST', body: JSON.stringify(body) });
+  if (r.status === 200) { closeDrawer(); await reload(); if (r.body.missing?.length) alert('任务已创建，但缺少配置，未启用：' + r.body.missing.join('、')); }
+  else $('#c-err').textContent = r.body.error || '创建失败';
+}
+
+// ---------------------------------------------------------------- detail
+
+async function openDetail(taskId) {
+  const [t, runs] = await Promise.all([api(`/tasks/${taskId}`), api(`/tasks/${taskId}/runs`)]);
+  if (t.status !== 200) return;
+  S.detail = t.body;
+  const runRows = (runs.body || []).map((r) => `
+    <div class="run">
+      <div class="row" style="justify-content:space-between">
+        <span>${new Date(r.scheduled_for * 1000).toLocaleString()}</span>
+        <span class="pill ${r.status}">${r.status}</span>
+        ${r.publish_status?`<span class="badge pub-${r.publish_status.split('_')[1]||'none'}">发布: ${{published:'已发布',paused:'暂停',skipped:'跳过',pending:'待发布'}[r.publish_status.split('_')[1]]||r.publish_status}</span>`:''}
+      </div>
+      ${r.note?`<div class="muted">${esc(r.note)}</div>`:''}
+      ${r.result?.summaryForOwner?`<div>${esc(r.result.summaryForOwner)}</div>`:''}
+      ${r.error?`<div style="color:var(--bad)">${esc(typeof r.error==='string'?r.error:JSON.stringify(r.error))}</div>`:''}
+      ${r.publishReason?`<div style="color:var(--warn)">发布暂停：${esc(r.publishReason)}${r.publishError?.missing?'（缺少 '+r.publishError.missing.join('、')+'）':''}</div>`:''}
+      <div class="row" style="margin-top:6px">
+        ${r.status==='needs_attention'?`<button class="small" data-resend="${r.id}">立即发送</button><button class="ghost small" data-skip="${r.id}">跳过</button>`:''}
+        ${r.publish_status==='publish_paused'?`<button class="small" data-retry-pub="${r.id}">仅重试发布</button>`:''}
+        ${r.status==='succeeded'&&r.publish_status==='publish_pending'?`<button class="ghost small" data-pub="${r.id}">发布</button>`:''}
+      </div>
+    </div>`).join('');
+  $('#drawer').innerHTML = `
+  <h2>${esc(t.body.title)}</h2>
+  <div class="muted">${TYPE_LABEL[t.body.type]} · ${(t.body.tags||[]).map((g)=>`<span class="tag">#${esc(g.name)}</span>`).join('')}</div>
+  <div class="muted">下次运行：${fmtNext(t.body)} · 状态：${t.body.status}</div>
+  ${t.body.missing?.length?`<div style="color:var(--warn)">需要补全：${t.body.missing.map(esc).join('、')}</div>`:''}
+  <div class="card" style="margin-top:12px"><b>内容/指令</b><div style="white-space:pre-wrap">${esc(t.body.content)}</div></div>
+  <div class="row" style="margin:12px 0"><button class="ghost small" data-trial="${t.body.id}">试运行（不真实发送）</button><span class="muted" id="trial-out"></span></div>
+  <h3>运行记录</h3>
+  ${runRows || '<div class="muted">暂无运行</div>'}`;
+  $('#backdrop').classList.add('show'); $('#drawer').classList.add('open');
+  document.querySelectorAll('[data-resend]').forEach((b)=>b.onclick=async()=>{await api(`/runs/${b.dataset.resend}/resend`,{method:'POST',body:'{}'});openDetail(taskId);});
+  document.querySelectorAll('[data-skip]').forEach((b)=>b.onclick=async()=>{await api(`/runs/${b.dataset.skip}/skip`,{method:'POST',body:'{}'});openDetail(taskId);});
+  document.querySelectorAll('[data-retry-pub]').forEach((b)=>b.onclick=async()=>{const r=await api(`/runs/${b.dataset.retryPub}/publish/retry`,{method:'POST',body:'{}'});if(r.status!==200)alert(r.body.error);openDetail(taskId);});
+  document.querySelectorAll('[data-pub]').forEach((b)=>b.onclick=async()=>{const r=await api(`/runs/${b.dataset.pub}/publish`,{method:'POST',body:'{}'});if(r.status!==200)alert(r.body.error);openDetail(taskId);});
+  document.querySelectorAll('[data-trial]').forEach((b)=>b.onclick=async()=>{
+    const r = await api(`/tasks/${b.dataset.trial}/trial`, { method: 'POST', body: '{}' });
+    $('#trial-out').textContent = r.status===200 ? `试运行预览完成（不会真实发送）：${JSON.stringify(r.body)}` : '试运行失败';
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
