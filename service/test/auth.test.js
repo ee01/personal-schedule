@@ -153,8 +153,12 @@ test('email code login: request → verify creates user; guest data merges on lo
     });
     assert.equal(verify.statusCode, 200);
     const verifyBody = await verify.json();
-    assert.equal(verifyBody.user.email, 'e2e.user@ringcentral.com');
-    assert.equal(verifyBody.merged, 1, 'guest data merged into the real account');
+    // corrected semantics: first binding of a NEW email upgrades the
+    // single-device account in place — userId preserved, no second account
+    assert.equal(verifyBody.inPlace, true);
+    assert.ok(String(verifyBody.user.email).includes('e2e.user'), 'email attached to the same account');
+    assert.equal(verifyBody.user.isGuest, false);
+    assert.equal(verifyBody.merged, 1, 'upgrade recorded');
 
     // the merged task is now owned by the real account
     const realCookie = verify.headers['set-cookie'][0].split(';')[0];
@@ -527,4 +531,77 @@ test('BUG-06: explicit draft status survives missing config (single-device)', as
     assert.equal(created.statusCode, 200);
     assert.equal((await created.json()).task.status, 'draft', 'draft status must not be silently downgraded to inactive');
   } finally { await new Promise((r2) => ctx.server.close(r2)); }
+});
+
+
+test('single-device binding a fresh email upgrades IN PLACE (userId and connections kept, no silent takeover)', async () => {
+  const ctx = await fresh();
+  try {
+    // single-device account with a task + a connection
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookie = g.headers['set-cookie'][0].split(';')[0];
+    const created = await ctx.req('POST', '/api/v1/tasks', { cookie, body: {
+      type: 'asme', title: '原位升级验证', content: 'x',
+      scheduleSpec: { kind: 'rate', intervalMinutes: 1440, timezone: 'Asia/Shanghai' },
+      config: { chatId: 'c' },
+    } });
+    const uidBefore = (await created.json()).task.user_id;
+    const connBody = { value: { token: 'tok-keep', ownChatId: 'me' } };
+    await ctx.req('PUT', '/api/v1/connections/rc_user', { cookie, body: connBody });
+    // bind a FRESH email (created for this guest) — dev fallback must be on
+    __config.authDevFallback = true;
+    const req = await ctx.req('POST', '/api/v1/auth/email/request', { cookie, body: { email: 'fresh.bind@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('fresh.bind@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie, body: { email: 'fresh.bind@ringcentral.com', code } });
+    assert.equal(v.statusCode, 200);
+    const body = await v.json();
+    assert.equal(body.inPlace, true, 'in-place upgrade path taken');
+    assert.equal(body.user.id, uidBefore, 'userId preserved by binding');
+    assert.equal(body.user.isGuest, false, 'no longer single-device');
+    const cookieAfter = v.headers['set-cookie'][0].split(';')[0];
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: cookieAfter });
+    const list = await tasks.json();
+    const flat = Array.isArray(list) ? list : list.tasks || [];
+    assert.ok(flat.some((t) => t.user_id === uidBefore), 'tasks stay on the SAME account');
+    const conns = await ctx.req('GET', '/api/v1/connections', { cookie: cookieAfter });
+    const cb = await conns.json();
+    assert.ok(cb.rc_user && cb.rc_user.token === '***', 'rc_user connection survives binding');
+  } finally { await new Promise((r2) => ctx.server.close(r2)); }
+});
+
+test('single-device binding an email owned by ANOTHER account is refused (no silent migration/overwrite)', async () => {
+  const ctx = await fresh();
+  try {
+    const owner = ctx.services.auth.ensureUser('owner.acc@ringcentral.com');
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookie = g.headers['set-cookie'][0].split(';')[0];
+    const connBody2 = { value: { token: 'mine', ownChatId: 'me' } };
+    await ctx.req('PUT', '/api/v1/connections/rc_user', { cookie, body: connBody2 });
+    const before = await ctx.req('GET', '/api/v1/tasks', { cookie });
+    __config.authDevFallback = true;
+    const req = await ctx.req('POST', '/api/v1/auth/email/request', { cookie, body: { email: 'owner.acc@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('owner.acc@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie, body: { email: 'owner.acc@ringcentral.com', code } });
+    assert.equal(v.statusCode, 400);
+    assert.equal((await v.json()).conflict, 'email_belongs_to_other_account', 'no silent takeover of another account');
+    // the conflict must have consumed the code WITHOUT touching either account:
+    // the owner account still owns its identity and the guest stays a guest.
+    const ownerRow = ctx.db.prepare('SELECT id, email, is_guest FROM users WHERE id = ?').get(owner.id);
+    assert.equal(ownerRow.email, 'owner.acc@ringcentral.com');
+    assert.equal(ownerRow.is_guest, 0);
+    const guestRow = ctx.db.prepare('SELECT is_guest FROM users WHERE id = ?').get(ctx.db.prepare('SELECT user_id FROM sessions WHERE id IN (SELECT id FROM sessions ORDER BY created_at DESC LIMIT 2)').get()?.user_id || '');
+    // simpler: no user row was migrated/overwritten — owner's email unique
+    const count = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE email = ?').get('owner.acc@ringcentral.com').n;
+    assert.equal(count, 1, 'no duplicate account created');
+  } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
 });

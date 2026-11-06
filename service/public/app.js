@@ -114,7 +114,18 @@ function specText(t) {
   const s = taskSpec(t); if (!s || !s.kind) return '';
   if (s.kind === 'one_shot') return `一次 · ${fmtNext(s.dateTime)}`;
   if (s.kind === 'rate') return `每 ${s.intervalMinutes} 分钟`;
-  if (s.kind === 'cron') { const p = (s.expr || '').split(/\s+/); return p[4] === '*' ? (p[5] === '*' ? `每天 ${p[1]}:${p[0]}` : `每周 ${p[5]} ${p[1]}:00`) : `每月 ${p[3]} 日`; }
+  if (s.kind === 'cron') {
+    // 6-field cron: M H DoM Month DoW — render human-readable
+    const f = (s.expr || '').split(/\s+/).map(Number);
+    const hm = String(f[1]).padStart(2,'0') + ':' + String(f[0]).padStart(2,'0');
+    const wd = ['日','一','二','三','四','五','六'][f[5]];
+    if (!isNaN(f[3]) && (s.expr||'').split(/\s+/)[3] !== '*') return `每月 ${f[3]} 日 ${hm}`;
+    if (f.length >= 6 && (s.expr||'').split(/\s+/)[5] !== '*') {
+      if (String((s.expr||'').split(/\s+/)[5]).includes('-')) return `工作日 ${hm}`;
+      return `每周${wd} ${hm}`;
+    }
+    return `每天 ${hm}`;
+  }
   if (s.kind === 'timeline') return `Timeline · ${s.project} · ${s.milestone}${s.offsetDays ? (s.offsetDays > 0 ? '+' + s.offsetDays : s.offsetDays) + ' 天' : ''} ${s.time}`;
   return s.kind;
 }
@@ -840,19 +851,21 @@ async function fillMilestones() {
   m.value = CF.spec?.milestone || '';
   p.onchange = () => fillMilestones();
 }
+function cfTimezone() { const el = $('#fTz'); return (el && el.value) || (CF.spec && CF.spec.timezone) || 'Asia/Shanghai'; }
 function specFromFreq() {
   // BUG-03: translate the visible frequency choice into the real spec
   const f = CF.freq || (CF.spec && CF.spec.kind === 'timeline' ? 'timeline' : CF.spec && CF.spec.kind === 'one_shot' ? 'once' : 'daily');
+  const tz = cfTimezone();
   const at = () => { const el = $('#fTime'); return el && el.value ? el.value : '09:00'; };
   const dom = () => { const el = $('#fDom'); return el && el.value ? Number(el.value) : 1; };
   const dow = () => { const el = $('#fDow'); return el && el.value ? Number(el.value) : 1; };
-  if (f === 'once') { const el = $('#fWhen'); return { kind: 'one_shot', dateTime: el && el.value ? Math.floor(new Date(el.value).getTime() / 1000) : Math.floor(Date.now() / 1000) + 86400, timezone: tz() }; }
-  if (f === 'rate') { const el = $('#fRate'); return { kind: 'rate', intervalMinutes: el && el.value ? Number(el.value) : 60, timezone: tz() }; }
-  if (f === 'daily') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * *', timezone: tz() };
-  if (f === 'weekdays') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * 1-5', timezone: tz() };
-  if (f === 'weekly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * ' + dow(), timezone: tz() };
-  if (f === 'monthly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' ' + dom() + ' * *', timezone: tz() };
-  return CF.spec || { kind: 'rate', intervalMinutes: 1440, timezone: tz() };
+  if (f === 'once') { const el = $('#fWhen'); return { kind: 'one_shot', dateTime: el && el.value ? Math.floor(new Date(el.value).getTime() / 1000) : Math.floor(Date.now() / 1000) + 86400, timezone: tz }; }
+  if (f === 'rate') { const el = $('#fRate'); return { kind: 'rate', intervalMinutes: el && el.value ? Number(el.value) : 60, timezone: tz }; }
+  if (f === 'daily') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * *', timezone: tz };
+  if (f === 'weekdays') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * 1-5', timezone: tz };
+  if (f === 'weekly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * ' + dow(), timezone: tz };
+  if (f === 'monthly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' ' + dom() + ' * *', timezone: tz };
+  return CF.spec || { kind: 'rate', intervalMinutes: 1440, timezone: tz };
 }
 function previewNext() {
   const el = $('#cfNextPrev'); if (!el) return;

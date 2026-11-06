@@ -752,10 +752,12 @@ function tzLabel(tz) {
     const now = new Date();
     const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' });
     const part = fmt.formatToParts(now).find((x) => x.type === 'timeZoneName');
-    return (part && part.value) || tz;
+    const off = (part && part.value) || '';
+    return tz.split('/').pop().replace('_', ' ') + ' ' + off.replace('GMT', 'UTC');
   } catch { return tz; }
 }
 function countdownTick() {
+  // BUG-28: correct countdown format
   document.querySelectorAll('.countdown').forEach((el) => {
     const at = Number(el.dataset.at);
     if (!at) return;
@@ -770,11 +772,21 @@ function countdownTick() {
     el.textContent = d > 0 ? d + 'd ' + h + ':' + pad(m) + ':' + pad(sec) : h > 0 ? h + ':' + pad(m) + ':' + pad(sec) : m + ':' + pad(sec);
   });
 }
-function fmtOffset(tz) {
-  try {
-    const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' });
-    const p = dtf.formatToParts(new Date()).find((x) => x.type === 'timeZoneName');
-    return (p && p.value) || '';
-  } catch { return ''; }
-}
->
+function fmtNext(sec){ if(!sec) return '—'; const d=new Date(sec*1000); const y=(n)=>n<10?'0'+n:n; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())} <span class="muted">· ${rel}</span>` }
+
+/* ---------- toasts / dialogs / menus (site components, no native popups) ---------- */
+// BUG-29: hydrate all [data-icon] placeholders with inline SVG
+(function hydrateIcons(){
+  const fill = () => { document.querySelectorAll('[data-icon]').forEach((el) => { const n = el.getAttribute('data-icon'); if (ICONS[n]) el.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[n] + '</svg>'; }); };
+  fill(); new MutationObserver(fill).observe(document.body, { childList: true, subtree: true });
+})();
+function toast(msg, o={}){ const t=document.createElement('div'); t.className='toast '+(o.kind||'ok'); t.innerHTML=`<div class="t-b">${msg}</div>`+(o.undo?`<button class="btn ghost sm" data-undo>撤销</button>`:''); $('#toasts').appendChild(t); const undo=o.undo; if(o.undo) t.querySelector('[data-undo]').onclick=()=>{ undo(); t.remove(); }; setTimeout(()=>t.remove(), o.stay||5000); }
+function confirmDlg({title,body,ok='确定',danger,onOk}){ DLG={html:()=>`<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm" role="alertdialog" aria-modal="true"><div class="mhead"><h3>${title}</h3></div><div class="mcontent" style="color:var(--text-2)">${body}</div><div class="mfoot"><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn ${danger?'danger':'primary'}" data-act="dlgOk" autofocus>${ok}</button></div></div></div>`,onOk}; renderModal(); setTimeout(()=>$('#modalLayer [data-act="dlgOk"]')?.focus(),30); }
+function closeDlg(){ DLG=null; renderModal(); }
+function openMenu(anchor, html, onClick){ closeMenu(); const m=document.createElement('div'); m.className='menu'; m.innerHTML=html; document.body.appendChild(m); const r=anchor.getBoundingClientRect(); const w=m.offsetWidth||180; m.style.left=Math.min(window.innerWidth-w-12, Math.max(12,r.left-(w-r.width)))+'px'; m.style.top=Math.min(window.innerHeight-m.offsetHeight-12, r.bottom+6)+'px'; MENU={el:m,onClick,anchor}; }
+function closeMenu(){ if(MENU){ MENU.el.remove(); MENU=null; } }
+document.addEventListener('click', (e)=>{ if(MENU && !MENU.el.contains(e.target) && !e.target.closest('[data-menu]') && !(MENU.anchor && (MENU.anchor === e.target || MENU.anchor.contains(e.target)))) closeMenu(); if(DLG && e.target.dataset?.act==='dlgClose') { DLG=null; renderModal(); } if(DLG && e.target.dataset?.act==='dlgOk'){ const keep=DLG.onOk(); if(keep!==false){DLG=null;renderModal();} } });
+</script>
+<script src="/app/app.js"></script>
+</body>
+</html>

@@ -179,14 +179,39 @@ function describeRole(type, cfg) {
 
   app.post('/api/v1/auth/email/verify', async (req, res) => {
     const { email, code } = req.body || {};
-    const user = auth.verifyEmailCode(String(email || ''), String(code || ''));
-    // identity conflict guard (defect 4): a REAL account session binding an
-    // email that belongs to a DIFFERENT account is a conflict — the userId is
-    // never silently switched; only guest (single-device) sessions upgrade.
+    const normEmail = String(email || '').trim().toLowerCase();
+    // identify the CURRENT session before anything creates users
     const cookies = req.headers.cookie || '';
     const m = cookies.match(/ps_session=([^;]+)/);
     const current = m ? auth.userBySession(m[1]) : null;
-    if (current && current.is_guest !== 1 && current.id !== user.id) {
+    const existing = db.prepare('SELECT id, email, is_guest FROM users WHERE email = ?').get(normEmail);
+
+    // an email already owned by a DIFFERENT account is a conflict — whether the
+    // current session is a real account (silent switch) or a single-device
+    // account (silent migration + connection overwrite). Both are refused.
+    if (existing && current && existing.id !== current.id) {
+      throw badRequest('该邮箱已被另一个账号使用；如需合并两个账号，请通过明确的冲突处理流程', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
+    }
+
+    if (current && current.is_guest === 1) {
+      // single-device binding a FRESH email: upgrade in place. Validate the
+      // code without creating a second user, then attach the email to the
+      // existing single-device account (userId preserved).
+      const row = db.prepare('SELECT * FROM login_codes WHERE email = ?').get(normEmail);
+      const { createHash } = await import('node:crypto');
+      if (!row || row.expires_at < Math.floor(Date.now() / 1000)) throw badRequest('验证码已过期，请重新获取');
+      if (row.code_hash !== createHash('sha256').update(String(code || '')).digest('hex')) {
+        db.prepare('UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?').run(normEmail);
+        throw badRequest('验证码错误');
+      }
+      db.prepare('DELETE FROM login_codes WHERE email = ?').run(normEmail);
+      const merged = auth.upgradeGuestToEmail(current.id, normEmail);
+      rotateSession(req, res, current.id, null); // same userId, fresh session
+      return { user: { ...publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(current.id)), isGuest: false }, ...merged, inPlace: true };
+    }
+
+    const user = auth.verifyEmailCode(normEmail, String(code || ''));
+    if (current && current.id !== user.id) {
       throw badRequest('该邮箱属于另一个账号，不能在此会话上自动切换——请先退出当前账号或使用冲突处理流程', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
     }
     const merged = mergeGuestOnLogin(req, user.id);
@@ -527,7 +552,7 @@ function describeRole(type, cfg) {
       // passthrough: includeHistory, occurrenceKey, limit, offset (Sol's
       // controlled-verification defect 1: pagination was dropped)
       const q = new URLSearchParams({ templateId });
-      for (const k of ['includeHistory', 'occurrenceKey', 'limit', 'offset', 'eventLimit']) {
+      for (const k of ['includeHistory', 'occurrenceKey', 'limit', 'offset', 'eventLimit', 'eventOffset']) {
         const v = req.query[k];
         if (v !== undefined && v !== '') q.set(k, String(v));
         if (k === 'includeHistory' && v !== '1') q.delete('includeHistory');
@@ -562,6 +587,7 @@ function describeRole(type, cfg) {
     const { action, sessionId } = req.body;
     const memory = getConnections(user.id).memory;
     if (!memory) throw badRequest('memory connection not configured');
+    const base = String(memory.baseUrl).replace(/\/+$/, ''); // was undeclared (500 root cause)
     // ownership check: the session must belong to THIS task's template before
     // any action is forwarded (E-184 contract)
     if (sessionId) {

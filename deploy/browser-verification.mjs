@@ -7,7 +7,7 @@ const TEST_KEY = process.env.SCHEDULE_TEST_MEMORY_KEY;
 if (!TEST_KEY) { console.error('SCHEDULE_TEST_MEMORY_KEY is not set — refusing to run with hardcoded credentials'); process.exit(2); }
 
 
-const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
 const browser = await chromium.launch({ executablePath: EXE });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];

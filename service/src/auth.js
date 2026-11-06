@@ -171,6 +171,28 @@ export function createAuth(db) {
    * behind on the guest account — a guest is not supposed to configure
    * credentials, and silently importing them could overwrite real ones.
    */
+  /**
+   * Single-device (guest) binding semantics:
+   *  - binding a NEW email upgrades the guest account IN PLACE — the userId
+   *    never changes, tasks/runs/connections simply become reachable from the
+   *    email identity. We attach the email to the existing guest user row
+   *    (clearing is_guest) instead of migrating into another account.
+   *  - merging into an existing OTHER account (silent takeover) is refused:
+   *    see the conflict guard in the verify route.
+   */
+  function upgradeGuestToEmail(guestId, email) {
+    if (!guestId || !email) return { merged: 0, note: 'missing ids' };
+    const guest = db.prepare('SELECT * FROM users WHERE id = ?').get(guestId);
+    if (!guest || guest.is_guest !== 1) return { merged: 0, note: 'not a single-device account' };
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existing && existing.id !== guestId) return { merged: 0, conflict: 'email_belongs_to_other_account' };
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE users SET email = ?, is_guest = 0 WHERE id = ?').run(email, guestId);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    return { merged: 1, inPlace: true };
+  }
   function mergeGuestIntoUser(guestId, realId) {
     if (guestId === realId) return { merged: 0, note: 'same user' };
     const guest = db.prepare('SELECT * FROM users WHERE id = ?').get(guestId);
@@ -213,7 +235,7 @@ export function createAuth(db) {
     if (token) db.prepare('DELETE FROM sessions WHERE id = ?').run(sha256Hex(token));
   }
 
-  return { ensureUser, issueToken, userByBearer, tokenIdByBearer, createSession, userBySession, destroySession, destroySessionsForToken, requestEmailCode, verifyEmailCode, createGuestUser, mergeGuestIntoUser, allowedEmail };
+  return { ensureUser, issueToken, userByBearer, tokenIdByBearer, createSession, userBySession, destroySession, destroySessionsForToken, requestEmailCode, verifyEmailCode, createGuestUser, upgradeGuestToEmail, mergeGuestIntoUser, allowedEmail };
 }
 
 // Route guards ----------------------------------------------------------
