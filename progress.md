@@ -91,3 +91,10 @@
 - 处理：为 schedule.xmnup.com 生自签证书（825 天，SAN schedule.xmnup.com）→ NPM certificate id 8（provider other，与 task/claw 同模式）→ proxy host 13 绑定，conf 13 增加 listen 443 ssl，nginx -t 通过后 reload；http 与 https 双通（实测）。
 - deploy.sh nginx 步骤改为幂等生成 ssl 配置块与证书（重跑不丢 https）；deployment.md 更新。
 - 顺带观察（非本次改动影响）：milo.xmnup.com 502 为既有问题（其上游 8100 无服务）。
+
+## 2026-11-06 · 登录令牌自助管理（用户反馈修复）
+
+- 澄清 pst_ 令牌语义：Schedule 账号凭据（PAT 式），非 memory 同步；memory pak 连接是独立配置。
+- 新增应用内令牌自助管理：GET/POST/DELETE /api/v1/auth/tokens + 设置页"账号与登录令牌"（新建只显示一次+复制/吊销）；登录页文案去误导。53/53 测试，已部署。
+- E 的登录令牌签发并存服务器 ~/personal-schedule/E-LOGIN-TOKEN.txt（600），不在评论传递。
+- 鉴权主干方案（邮箱验证码/Google OAuth/恢复码 + 扩展无感层）仍待用户决策。
