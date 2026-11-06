@@ -200,3 +200,9 @@
 - **BUG-39**：`.webmanifest` MIME 纠正为 `application/manifest+json`（部署实测）。
 - 新增 `deploy/boot-smoke.mjs`（正式启动冒烟，无补丁）；68/68 单测保持通过。
 - 部署指纹：/app=`44ebe0a7…`、/app/app.js=`682a315e…`、/share/index.html=`02a5593e…`（app.js 与上轮一致，仅 index.html 变更）。
+
+## 2026-11-07 · 尝试次数上限补齐（完成，69/69，已部署）
+
+- **复验新失败（单设备原位绑定绕过验证码尝试上限）**：原位分支现与 `verifyEmailCode` 共用同一语义——错误尝试满限（默认 5）后，码行视为耗尽，**正确码也被拒绝**（400），不发生绑定，账号保持单设备。新增独立回归测试覆盖两项失败断言：拒绝 + 不绑定（含 attempts=DB 计数、isGuest 断言）。
+- 69/69 单测；真实浏览器启动冒烟（headless-shell，1440/390）保持 0 JS 错误。
+- 部署指纹：`/app`=`44ebe0a7…`、`/app/app.js`=`682a315e…`、`/share/index.html`=`02a5593e…`（本轮仅服务端代码变更，静态指纹不变属预期；行为以线上 API 为准）。
