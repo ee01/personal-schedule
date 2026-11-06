@@ -52,6 +52,11 @@ export function buildApp(db) {
   registerRoutes(app, services);
   const webDir = path.join(here, '..', 'public');
   app.static('/app', webDir);
+  // domain root lands on the management app
+  app.get('/', (req, res) => {
+    res.writeHead(302, { Location: '/app' });
+    res.end();
+  });
   app.static('/share', path.join(webDir, 'share')); // public share SPA
   return { app, services };
 }
