@@ -195,7 +195,15 @@ export function createTaskStore(db, getConnection) {
     const contentChanged = next.content !== task.content;
     const revision = specChanged || contentChanged ? task.revision + 1 : task.revision;
     let status = task.status;
-    if (missing.length) {
+    // BUG-06: an explicit draft stays a draft (drafts never execute, so an
+    // incomplete setup must not demote the user's choice); an explicit
+    // activate is honored when complete and re-gated to inactive otherwise;
+    // a plain edit keeps the current status instead of silently drifting it
+    if (patch.status === 'draft') {
+      status = 'draft';
+    } else if (patch.status === 'active') {
+      status = missing.length ? 'inactive' : 'active';
+    } else if (missing.length) {
       status = 'inactive';
     } else if (status === 'inactive') {
       status = 'paused'; // completed config, but requires explicit enable

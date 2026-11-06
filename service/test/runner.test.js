@@ -204,3 +204,53 @@ test('rate task reschedules from last run', async () => {
     providers.asme.run = original;
   }
 });
+
+
+// BUG-06 regression (UI round 4): PATCH status semantics on updateTask
+test('PATCH with status draft keeps the task a draft even when config is missing', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx); // asme without rc_user connection -> inactive + missing
+  assert.equal(task.status, 'inactive');
+  const updated = ctx.store.updateTask(ctx.user.id, task.id, {
+    title: 'still my draft', content: 'hello',
+    scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' },
+    config: { chatId: 'chat1' }, status: 'draft',
+  });
+  assert.equal(updated.status, 'draft', 'explicit draft survives missing config');
+});
+
+test('PATCH with status active re-gates incomplete setups to inactive and activates complete ones', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx); // missing rc_user
+  const gated = ctx.store.updateTask(ctx.user.id, task.id, {
+    title: 'try activate', content: 'hello',
+    scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' },
+    config: { chatId: 'chat1' }, status: 'active',
+  });
+  assert.equal(gated.status, 'inactive', 'cannot activate an incomplete task');
+  assert.ok(gated.missing.includes('connection:rc_user'));
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)').run(
+    ctx.user.id, 'rc_user', JSON.stringify({ token: 'x', ownChatId: 'me' }), nowSec(),
+  );
+  const activated = ctx.store.updateTask(ctx.user.id, task.id, {
+    title: 'try activate', content: 'hello',
+    scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' },
+    config: { chatId: 'chat1' }, status: 'active',
+  });
+  assert.equal(activated.status, 'active');
+});
+
+test('PATCH without status keeps an active task active (plain edit never drifts status)', () => {
+  const ctx = fresh();
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)').run(
+    ctx.user.id, 'rc_user', JSON.stringify({ token: 'x', ownChatId: 'me' }), nowSec(),
+  );
+  const { task } = insertTask(ctx, { status: 'active' });
+  assert.equal(task.status, 'active');
+  const edited = ctx.store.updateTask(ctx.user.id, task.id, {
+    title: 'renamed', content: 'hello again',
+    scheduleSpec: { kind: 'cron', expr: '30 9 * * *', timezone: 'Asia/Shanghai' },
+    config: { chatId: 'chat1' },
+  });
+  assert.equal(edited.status, 'active', 'editing must not pause/demote an active task');
+});
