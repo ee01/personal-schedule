@@ -775,10 +775,15 @@ function countdownTick() {
 function fmtNext(sec){ if(!sec) return '—'; const d=new Date(sec*1000); const y=(n)=>n<10?'0'+n:n; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())} <span class="muted">· ${rel}</span>` }
 
 /* ---------- toasts / dialogs / menus (site components, no native popups) ---------- */
-// BUG-29: hydrate all [data-icon] placeholders with inline SVG
+// BUG-29/BUG-40: hydrate [data-icon] placeholders idempotently. The
+// observer must not react to its own writes — only fill elements that have no
+// svg child yet, and temporarily disconnect while writing.
 (function hydrateIcons(){
-  const fill = () => { document.querySelectorAll('[data-icon]').forEach((el) => { const n = el.getAttribute('data-icon'); if (ICONS[n]) el.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[n] + '</svg>'; }); };
-  fill(); new MutationObserver(fill).observe(document.body, { childList: true, subtree: true });
+  const fill = (el) => { const n = el.getAttribute('data-icon'); if (!el || el.firstElementChild || !ICONS[n]) return; el.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[n] + '</svg>'; };
+  const scan = () => { document.querySelectorAll('[data-icon]').forEach(fill); };
+  let writing = false;
+  const ob = new MutationObserver(() => { if (writing) return; writing = true; setTimeout(() => { try { scan(); } finally { writing = false; } }, 50); });
+  ob.observe(document.body, { childList: true, subtree: true });
 })();
 function toast(msg, o={}){ const t=document.createElement('div'); t.className='toast '+(o.kind||'ok'); t.innerHTML=`<div class="t-b">${msg}</div>`+(o.undo?`<button class="btn ghost sm" data-undo>撤销</button>`:''); $('#toasts').appendChild(t); const undo=o.undo; if(o.undo) t.querySelector('[data-undo]').onclick=()=>{ undo(); t.remove(); }; setTimeout(()=>t.remove(), o.stay||5000); }
 function confirmDlg({title,body,ok='确定',danger,onOk}){ DLG={html:()=>`<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm" role="alertdialog" aria-modal="true"><div class="mhead"><h3>${title}</h3></div><div class="mcontent" style="color:var(--text-2)">${body}</div><div class="mfoot"><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn ${danger?'danger':'primary'}" data-act="dlgOk" autofocus>${ok}</button></div></div></div>`,onOk}; renderModal(); setTimeout(()=>$('#modalLayer [data-act="dlgOk"]')?.focus(),30); }
