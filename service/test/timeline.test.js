@@ -139,3 +139,53 @@ test('normalizeReleases accepts several payload shapes', () => {
   assert.equal(ctx.timeline.normalizeReleases([{ release: 'R1', date: '2026-11-01', milestones: [] }])[0].release, 'R1');
   assert.equal(ctx.timeline.normalizeReleases({ releases: [{ name: 'R2', releaseDate: '2026-11-02', milestones: [{ title: 'FF', due: '2026-11-01' }] }] })[0].release, 'R2');
 });
+
+test('H6: real release-info payload shape (currentRelease + M/D/YYYY milestone map) normalizes correctly', async () => {
+  const ctx = fresh();
+  // captured from https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=mThor (2026-11-06)
+  const realPayload = {
+    currentRelease: '26.4.20',
+    currentPhase: 'Embedded',
+    nextPhase: 'FF',
+    nextPhaseStartDate: '2026-11-11',
+    releaseInfo: {
+      '': 'M Release 26.4.20',
+      CF: '11/18/2026',
+      DF: '',
+      FF: '11/11/2026',
+      SO: '11/25/2026',
+      Comment: '',
+      Release: '11/27/2026',
+      Embedded: '10/28/2026',
+      'Rollout 100%': '12/3/2026',
+    },
+  };
+  // normalizeReleases is internal; verify through refreshProject by pointing the
+  // source URL at a local fixture is overkill — import the module's normalize via
+  // a cache seed produced by the same code path instead:
+  const services = ctx;
+  const { createTimeline } = await import('../src/timeline.js');
+  // exercise via refreshProject with a stubbed fetch
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => realPayload });
+  try {
+    process.env.SCHEDULE_TIMELINE_SOURCE_URL = 'https://example.test/api/bot/get_release_info/?project={project}';
+    const timeline = createTimeline(ctx.db, { notify: { sendOwnerNotification: async () => {} }, onTaskNeedsAttention: async () => {} });
+    const result = await timeline.refreshProject('mThor');
+    assert.equal(result.ok, true);
+    const cached = ctx.db.prepare('SELECT data, stale FROM timeline_cache WHERE project = ?').get('mThor');
+    const releases = JSON.parse(cached.data);
+    assert.equal(cached.stale, 0);
+    assert.equal(releases.length, 1);
+    assert.equal(releases[0].release, '26.4.20');
+    const ff = releases[0].milestones.find((m) => m.name === 'FF');
+    assert.equal(ff.date, '2026-11-11'); // M/D/YYYY normalized to ISO
+    const rollout = releases[0].milestones.find((m) => m.name === 'Rollout 100%');
+    assert.equal(rollout.date, '2026-12-03');
+    // unset (DF) and non-date (Comment) milestones are skipped, not errors
+    assert.ok(!releases[0].milestones.some((m) => m.name === 'DF' || m.name === 'Comment'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.SCHEDULE_TIMELINE_SOURCE_URL;
+  }
+});

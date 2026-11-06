@@ -24,11 +24,20 @@ input[type=text],input[type=password],select{border:1px solid var(--line);border
 .result.ok{background:#ecfdf5;color:#065f46}.result.err{background:#fef2f2;color:#991b1b}.result.warn{background:#fffbeb;color:#92400e}
 .hint{font-size:12px;color:var(--muted)}
 #ext-banner{display:none;background:#eef0ff;border:1px solid #c7ccf5;color:#3730a3;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+.ext-card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;background:#fff}
+.ext-steps{display:flex;gap:14px;margin:12px 0}
+.ext-step{flex:1;padding:10px;border:1px solid var(--line);border-radius:10px;text-align:center;font-size:13px}
+.ext-step .n{display:inline-block;width:22px;height:22px;line-height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:12px;margin-bottom:4px}
+.ext-step.cur{border-color:var(--brand);background:#f5f5ff}
+.pill.live{display:inline-flex;align-items:center;gap:6px;background:#fffbeb;color:#92400e;border-radius:999px;padding:3px 12px;font-size:12px;border:1px solid #fde68a}
+.pill.live .dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div id="ext-banner"></div>
+  <div id="ext-card" class="ext-card" style="display:none"></div>
   <div id="share"></div>
 </div>
 <script>
@@ -112,15 +121,77 @@ async function doImport(){
 }
 
 // extension handshake (H9): the Personal AI extension announces itself; the
-// page passes the share token for a continuation import after install.
+// page passes the share token so the extension can continue the import with
+// the receiver's own identity (site-authorized token, spec 8.6).
+const extState = { phase: 'install', version: null }; // install → waiting → ready | upgrade
+
+function saveSelection() {
+  try {
+    const selected = [...document.querySelectorAll('input[data-i]:checked')].map((el) => el.dataset.i);
+    sessionStorage.setItem('ps-share-sel-' + state.token, JSON.stringify(selected));
+  } catch { /* sessionStorage unavailable */ }
+}
+
+function restoreSelection() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('ps-share-sel-' + state.token) || 'null');
+    if (Array.isArray(saved)) {
+      for (const el of document.querySelectorAll('input[data-i]')) el.checked = saved.includes(el.dataset.i);
+    }
+  } catch { /* ignore */ }
+}
+
+document.addEventListener('change', (e) => { if (e.target.matches('input[data-i]')) saveSelection(); });
+
+function renderExtPhase() {
+  const banner = document.getElementById('ext-banner');
+  const card = document.getElementById('ext-card');
+  if (!card) return;
+  if (extState.phase === 'ready') {
+    banner.style.display = 'block';
+    banner.textContent = '已检测到 Personal AI 扩展' + (extState.version ? `（v${extState.version}）` : '') + '，可在扩展中一键导入本任务包；你的勾选已保留。';
+    card.style.display = 'none';
+    return;
+  }
+  banner.style.display = 'none';
+  card.style.display = 'block';
+  const up = extState.phase === 'upgrade';
+  card.innerHTML = `
+    <div class="row" style="align-items:flex-start;gap:12px">
+      <b>${up ? '需要更新 Personal AI 扩展' : '导入需要 Personal AI 扩展'}</b>
+    </div>
+    <div class="sub">${up
+      ? `当前扩展版本低于本分享要求（schema v${state.data?.schemaVersion || 1}），更新后会自动继续，你的勾选会保留。`
+      : '扩展负责以你的身份安全地把任务写入你的账户。安装后回到这里，<b>本页会自动继续导入</b>，你的勾选已保存在当前会话。'}</div>
+    <div class="ext-steps">
+      <div class="ext-step cur"><span class="n">01</span><div>${up ? '更新扩展' : '安装扩展'}</div><div class="hint">${extInfo.extInstallUrl ? '<a href="' + esc(extInfo.extInstallUrl) + '" target="_blank" rel="noopener">打开安装页</a>' : 'Chrome 网上应用店（安装入口地址由部署配置，见 SCHEDULE_EXT_INSTALL_URL）'}</div></div>
+      <div class="ext-step"><span class="n">02</span><div>回到本页</div><div class="hint">本页自动继续，无需重新确认</div></div>
+    </div>
+    <div class="row"><span class="pill live"><span class="dot"></span>等待扩展${up ? '更新' : '安装'}完成…</span></div>
+    <div class="hint" style="margin-top:8px">也可以继续用页面登录 + 勾选导入（下方），两者等价。</div>`;
+}
+
 window.addEventListener('message', (event) => {
   if (event.data?.channel !== 'personal-schedule') return;
-  document.getElementById('ext-banner').style.display = 'block';
-  document.getElementById('ext-banner').textContent = '已检测到 Personal AI 扩展，可通过扩展一键导入本任务包。';
+  // extension announces itself with its version
+  extState.version = event.data.version || null;
+  const minV = String(extInfo.handshake?.minExtensionVersion || '0');
+  const older = extState.version && String(extState.version) < minV;
+  extState.phase = older ? 'upgrade' : 'ready';
+  renderExtPhase();
   event.source.postMessage({ channel: 'personal-schedule', type: 'share-page', shareToken: state.token, schemaVersion: state.data?.schemaVersion }, '*');
 });
 window.__PERSONAL_SCHEDULE__ = { product: 'personal-schedule', version: '0.1.0', getShareToken: () => state.token };
-loadShare();
+
+let extInfo = { extInstallUrl: null, handshake: null };
+async function boot() {
+  const info = await api('/extension/info');
+  if (info.status === 200) extInfo = { ...extInfo, ...info.body };
+  await loadShare();
+  restoreSelection();
+  renderExtPhase();
+}
+boot();
 </script>
 </body>
 </html>

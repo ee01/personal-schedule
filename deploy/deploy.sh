@@ -77,7 +77,7 @@ deploy_app() {
 </plist>
 EOF
   scp -q /tmp/com.personal-schedule.service.plist "$HOST:~/Library/LaunchAgents/com.personal-schedule.service.plist"
-  ssh_run 'launchctl bootout gui/$(id -u)/com.personal-schedule.service 2>/dev/null || true; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.personal-schedule.service.plist'
+  ssh_run 'launchctl bootout gui/$(id -u)/com.personal-schedule.service 2>/dev/null || true; sleep 1; for i in 1 2 3; do launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.personal-schedule.service.plist && break; sleep 2; done'
   sleep 2
   ssh_run "curl -sf http://127.0.0.1:$PORT/api/v1/health" && echo " (local health OK)"
 }

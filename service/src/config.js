@@ -34,6 +34,9 @@ export const config = {
   timelineMaxAgeMinutes: intEnv('SCHEDULE_TIMELINE_MAX_AGE_MINUTES', 26 * 60), // freshness threshold for send-time validation
   // Sessions
   sessionDays: intEnv('SCHEDULE_SESSION_DAYS', 30),
+  // Extension install entry (share page install guide). The real Chrome Web
+  // Store / CRX URL is deployment-specific; set SCHEDULE_EXT_INSTALL_URL.
+  extInstallUrl: process.env.SCHEDULE_EXT_INSTALL_URL || '',
   // HTTP client
   httpTimeoutMs: intEnv('SCHEDULE_HTTP_TIMEOUT_MS', 20000),
 };

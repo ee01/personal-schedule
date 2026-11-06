@@ -187,7 +187,10 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
     const attemptRow = db.prepare('SELECT attempt FROM occurrences WHERE id = ?').get(occurrence.id);
     try {
       const result = await provider.run({
-        task: { ...task, config: parseJson(occurrence.task_config, {}), notify: parseJson(occurrence.task_notify, {}) },
+        // `task` is the JOIN-parsed row (config/notify from the tasks table);
+        // the leased `occurrence` row is occurrences-only, so re-parsing its
+        // non-existent task_config columns would wipe the task config.
+        task,
         occurrence,
         connections,
       });

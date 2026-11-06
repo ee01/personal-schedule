@@ -102,6 +102,33 @@ test('runner dispatch: idempotent provider retries then succeeds', async () => {
   }
 });
 
+test('runner dispatch passes the task config from the tasks table (not the occurrence row)', async () => {
+  const ctx = fresh();
+  const original = providers.outreach.run;
+  let seenTask = null;
+  providers.outreach.run = async ({ task }) => {
+    seenTask = task;
+    return { status: 'succeeded', summaryForOwner: 'ok' };
+  };
+  try {
+    const { task } = insertTask(ctx, {
+      type: 'outreach',
+      config: { template: { question: 'q', recipients: [{ targetType: 'user', targetRef: 'u1' }] } },
+      scheduleSpec: { kind: 'one_shot', dateTime: nowSec() - 10, timezone: 'UTC' },
+    });
+    ctx.db.prepare('UPDATE tasks SET status = ?, next_run_at = ? WHERE id = ?').run('active', nowSec() - 5, task.id);
+    await ctx.runner.tick();
+    // the leased occurrence row is occurrences-only; provider must still see
+    // the full task config (regression: config was wiped to {} before the fix)
+    assert.deepEqual(seenTask?.config?.template?.question, 'q');
+    assert.equal(seenTask?.config?.template?.recipients?.[0]?.targetRef, 'u1');
+    const occ = ctx.db.prepare('SELECT * FROM occurrences WHERE task_id = ?').get(task.id);
+    assert.equal(occ.status, 'succeeded');
+  } finally {
+    providers.outreach.run = original;
+  }
+});
+
 test('occurrence key uniqueness: same slot never dispatched twice', () => {
   const ctx = fresh();
   const { task } = insertTask(ctx, {

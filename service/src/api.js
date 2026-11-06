@@ -37,6 +37,9 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     schemaVersion: 1,
     publicUrl: publicBaseUrl(),
     handshake: { method: 'postMessage', channel: 'personal-schedule', minExtensionVersion: '0.1.0' },
+    // empty string = install URL not yet configured for this deployment
+    // (the share page falls back to a generic install-guide card)
+    extInstallUrl: config.extInstallUrl || null,
   }));
 
   // ------------------------------------------------------------ auth

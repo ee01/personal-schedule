@@ -26,9 +26,39 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
   }
 
   function normalizeReleases(payload) {
-    // Accept a few reasonable shapes; the concrete internal Release Info
-    // contract is H6 and gets pinned during deployment verification.
-    const list = Array.isArray(payload) ? payload : payload?.releases || payload?.items || [];
+    // Real internal Release Info contract (H6, pinned 2026-11-06 against
+    // https://heimdall-xmn02.int.rclabenv.com/api/bot/get_release_info/?project=<P>):
+    //   { currentRelease: "26.4.20", currentPhase, nextPhaseStartDate,
+    //     releaseInfo: { "": "M Release 26.4.20", "FF": "11/11/2026", "DF": "", ... } }
+    // `releaseInfo` maps milestone name → date in M/D/YYYY ("" = not set → waiting-for-date).
+    // Legacy array shapes stay accepted for compatibility with earlier fixtures.
+    if (Array.isArray(payload)) {
+      return payload.map((release) => ({
+        release: String(release.release || release.name || release.version || ''),
+        date: String(release.date || release.releaseDate || release.release_date || '').slice(0, 10),
+        milestones: (release.milestones || []).map((m) => ({
+          name: String(m.name || m.milestone || m.title || ''),
+          date: String(m.date || m.dueDate || m.due || '').slice(0, 10),
+        })),
+      })).filter((release) => release.release);
+    }
+    const current = payload?.currentRelease;
+    const map = payload?.releaseInfo;
+    if (typeof current === 'string' && current.trim() && map && typeof map === 'object') {
+      const milestones = [];
+      for (const [name, raw] of Object.entries(map)) {
+        const label = name.trim();
+        if (!label || label === 'Comment') continue; // "" key is the release title, not a milestone
+        const value = typeof raw === 'string' ? raw.trim() : '';
+        if (!value) continue; // unset milestone date → 等待日期 (edge state, not an error)
+        const m = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // M/D/YYYY → YYYY-MM-DD
+        if (!m) continue;
+        milestones.push({ name: label, date: `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}` });
+      }
+      if (milestones.length === 0) return [];
+      return [{ release: current.trim(), date: '', milestones }];
+    }
+    const list = payload?.releases || payload?.items || [];
     return list.map((release) => ({
       release: String(release.release || release.name || release.version || ''),
       date: String(release.date || release.releaseDate || release.release_date || '').slice(0, 10),
