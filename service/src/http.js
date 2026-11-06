@@ -130,7 +130,9 @@ function serveStatic(req, res, pathname, mount) {
   let relative = pathname;
   if (mount.prefix) {
     const pfx = mount.prefix || '';
-    if (pfx !== '' && pathname !== pfx && !pathname.startsWith(pfx + '/')) return false;
+    // '/' is the site root: it matches every path; only '' (unset) is skipped.
+    if (pfx && pfx !== '/' && pathname !== pfx && !pathname.startsWith(pfx + '/')) return false;
+    if (pfx === '/' && pathname !== pfx) { /* fall through: root matches all */ }
     relative = pathname.slice(pfx.length);
     relative = pathname.slice(mount.prefix.length);
   }
