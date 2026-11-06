@@ -48,6 +48,8 @@ deploy_app() {
   ssh_run "[ -d ~/personal-schedule/current ] && cp -a ~/personal-schedule/current ~/personal-schedule/releases/$STAMP || true"
   rsync -az --delete --exclude data --exclude '.DS_Store' --exclude .DS_Store \
     "$HERE/../service/" "$HOST:personal-schedule/current/"
+  # CLI and service must share one data dir: symlink current/data → the real one
+  ssh_run 'rm -rf ~/personal-schedule/current/data && ln -sfn ~/personal-schedule/data ~/personal-schedule/current/data'
   cat > /tmp/com.personal-schedule.service.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

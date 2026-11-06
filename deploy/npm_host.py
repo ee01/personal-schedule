@@ -26,14 +26,27 @@ def main():
         if existing:
             print(f'exists {existing[0]}')
             return
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
         cur = db.execute(
             '''insert into proxy_host
-               (created_on, modified_on, domain_names, forward_scheme, forward_host, forward_port,
-                caching_enabled, block_exploits, allow_websocket_upgrade, http2_support,
-                hsts_enabled, hsts_subdomains, certificate_id, ssl_forced, enabled, locations,
-                hsts_preload, letsencrypt_certificate_id)
-               values (?,?,?,?,?,?,0,0,0,0,0,0,0,1,'[]',0,0)''',
-            (int(time.time()), int(time.time()), json.dumps([domain]), 'http', forward_host, port),
+               (created_on, modified_on, owner_user_id, is_deleted, domain_names,
+                forward_host, forward_port, access_list_id, certificate_id, ssl_forced,
+                caching_enabled, block_exploits, advanced_config, meta,
+                allow_websocket_upgrade, http2_support, forward_scheme, enabled,
+                locations, hsts_enabled, hsts_subdomains, trust_forwarded_proto)
+               values (:created_on, :modified_on, 1, 0, :domain_names,
+                :forward_host, :forward_port, 0, 0, 0,
+                0, 0, '', :meta,
+                0, 0, 'http', 1,
+                '[]', 0, 0, 0)''',
+            {
+                'created_on': now,
+                'modified_on': now,
+                'domain_names': json.dumps([domain]),
+                'forward_host': forward_host,
+                'forward_port': port,
+                'meta': '{"nginx_online":true,"nginx_err":null}',
+            },
         )
         db.commit()
         print(f'inserted {cur.lastrowid}')

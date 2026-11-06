@@ -43,3 +43,12 @@
 - §3.9 拆为 3.9.1–3.9.5：发现延迟/可配置刷新频率与时区、刷新后重算（推迟顺延/已执行不重发）、错过窗口（宽限补发/超宽限人工决定）、唯一键 (userId,taskId,release,milestone)、新鲜度与执行态分离、验收用例 T1–T12
 - prototype-flows v0.6（延迟触发/错过窗口/顺延态）、agent.md、task_plan/findings 同步；未写生产代码
 - 附件交付至 E-181，回报 E-180
+
+## 2026-11-06 · E-183 Stage 3 首轮实现（进行中）
+
+- `service/` 生产实现落地（零 npm 依赖，node:sqlite/node:http，Node ≥ 23.4）：任务 CRUD + missing 配置门禁、Tag 多对多/类型视图、持久化 Runner（cron/rate/one-shot/timeline；occurrence 唯一键、租约、attempt 重试、重启恢复、非幂等 unknown 不自动重发）、多执行器（RC 直发 asme/bot、AI Report JQL/HTTP+模板渲染、outreach trigger-occurrence 契约调用、agent-tasks/execute 委托、Multica webhook 直打含 Idempotency-Key、JIRA 托管 webhook POST）、通知与发布分离（三档通知我、字段级模板校验、publish_paused/独立重试/不用日志兜底、试运行双预览不发送）、Tag 实时视图分享（脱敏模板视图、可选导入默认全选、(receiver,refKey) 判重、requestId 幂等、撤销失效、导入计数、默认执行器复用、jiraRuleRef 传递）。
+- 37 项单测（runner/time/timeline T1-T12 子集/shares/publish/store）全部通过；本地 + 服务器端到端（登录/建任务/分享/公开视图/导入）验证。
+- Web：`/app` 管理界面（登录、任务/标签/分享/设置、创建向导、运行详情、补全视图）、`/share/:token` 公开分享页（登录导入、扩展握手 postMessage 通道）。
+- 部署：rcadmin@10.32.56.212，launchd `com.personal-schedule.service`，0.0.0.0:3230，NPM proxy host 13（nginx -t 通过后 reload，DB/conf 均有备份，未动其他站点），http://schedule.xmnup.com/ 已可用（DNS 原本即指向该机）。E 的账号已建，bootstrap token 存服务器 `~/personal-schedule/BOOTSTRAP_TOKEN.txt`（chmod 600，不入仓库/文档）。
+- 契约：docs/schedule-service-api-contract.md v0.1（含待联调 V1–V7）。
+- 待办：memory trigger-occurrence（E-184）、Multica webhook 真实触发（H4/V3）、RC JWT 刷新（V4）、Timeline 实源校准（H6/V5）、publish_fields 结果契约（V6）、write dry-run（H12/V7）、UI 与 E-182 原型全面对齐。
