@@ -256,3 +256,10 @@
 - **已就绪的落地准备**：`deploy/verify-ext-crx.mjs`（下载官方签名 CRX 并核验版本/内容脚本域名匹配/后台桥，全过才退出 0；当前包 3/3 FAIL 属预期）；`SCHEDULE_EXT_MIN_VERSION` 服务端配置管道（默认 0.1.0 保持现行为，发布核验通过后收敛为实际版本）；`docs/operations/extension-install-entry.md` 逐步 runbook（核验→写 service.env→重部署→确认 /extension/info→同指纹复验商店安装→导入链）。
 - 78/78 单测（新增 extension info 契约测试）；启动冒烟 0 JS 错误；已部署（服务端代码 md5 与提交一致；静态指纹不变属预期——本轮无静态改动）。部署后经域名连续 3×200 复核，重启窗口的瞬时 502 已消失。
 - **剩余缺口（非 Schedule 侧）**：扩展发布负责人将含 `eadc9667` 的构建发布到既有官方条目；发布后按 runbook 四步执行。
+
+## 2026-11-07 · E-184 复验三组缺陷修复（完成，81/81，已部署）
+
+- **变量时区不一致**：`taskFromJoin` 现带出 JOIN 别名 `task_schedule_spec`（原映射读 `row.schedule_spec` 恒为 undefined→空 spec）与任务级 `timezone`——变量渲染按规格时区（LA 预览=LA 发送），不再回落上海；通知/发布 JOIN 补选同列。
+- **共享设置越权**：`PUT /settings/{key}` 无条件拒绝 `timeline.lastRefreshAt`（内部冷却标记，关闭冷却绕过）；其余 `timeline.*` 写入仅限已绑定邮箱账户（关闭全局 sourceUrl 改写）；单设备任务能力不受影响。
+- **错误路径泄露源地址**：刷新失败信息在写入时（last_error）与 API 边界（refresh 结果、/timeline/projects lastError 含历史行）双重遮蔽——覆盖配置模板、按项目构建的 URL 及同前缀任意 URL。
+- 81/81 单测（新增：JOIN 映射/时区渲染、guest PUT 两条拒绝、泄露遮蔽）；启动冒烟 0 JS 错误；已部署（服务端三文件 md5 与提交一致；静态指纹不变属预期）。
