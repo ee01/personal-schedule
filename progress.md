@@ -249,3 +249,10 @@
 - **安全边界（Opus 观察）**：`GET /settings` 对未绑定 guest 身份隐藏 `timeline.sourceUrl`；`POST /timeline/refresh` 部署级 60 秒冷却（单设备正常使用不受影响，实测第二次 400）。
 - **验证**：77/77 单测（归档/恢复、Tag 软删、内容变量回归）；`deploy/r7-probe.mjs` 28/28、0 pageerror、清理后任务 0；R5 13/13、R6 9/9、R4 30/30、启动冒烟 0 JS 错误。
 - **部署指纹**：`/app`=`a45c9b0d…`、`/app/app.js`=`c827911a…`、`/share/index.html`=`19213828…`。
+
+## 2026-11-07 · E-184 扩展安装入口交接（对齐完成，等待兼容发布物）
+
+- **独立复核官方 CRX**（Google 更新服务实际下载，28,031,059 字节 CRX3）：版本 **11.1.0**——无 `contentScriptSchedule.js`、无 Schedule 域名 content_scripts、后台无 `PERSONAL_SCHEDULE_BRIDGE`。与 Sol 的结论一致；**兼容发布物尚未存在**，`SCHEDULE_EXT_INSTALL_URL` 正确保持未配置（线上 `extInstallUrl:null` 实测）。
+- **已就绪的落地准备**：`deploy/verify-ext-crx.mjs`（下载官方签名 CRX 并核验版本/内容脚本域名匹配/后台桥，全过才退出 0；当前包 3/3 FAIL 属预期）；`SCHEDULE_EXT_MIN_VERSION` 服务端配置管道（默认 0.1.0 保持现行为，发布核验通过后收敛为实际版本）；`docs/operations/extension-install-entry.md` 逐步 runbook（核验→写 service.env→重部署→确认 /extension/info→同指纹复验商店安装→导入链）。
+- 78/78 单测（新增 extension info 契约测试）；启动冒烟 0 JS 错误；已部署（服务端代码 md5 与提交一致；静态指纹不变属预期——本轮无静态改动）。部署后经域名连续 3×200 复核，重启窗口的瞬时 502 已消失。
+- **剩余缺口（非 Schedule 侧）**：扩展发布负责人将含 `eadc9667` 的构建发布到既有官方条目；发布后按 runbook 四步执行。
