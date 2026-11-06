@@ -176,3 +176,11 @@
 - **Sol 受控验收的5个缺陷全部修复**：①chain 代理透传 limit/offset/eventLimit；②历史渲染读 eventType/payload（memory 实际字段）+type/detail 回退；③归属校验读 items 包装（此前 +2 合法请求被 400 误拒）；④真实账号会话绑定他人邮箱 → 显式 conflict 拒绝（不再静默换 userId），访客会话仍走合并升级；⑤访客合并同时迁移 connections（RC/Memory 凭据随账号保留）。
 - **分享页品牌色核实为真实缺陷**：`--brand:#7c8cff` 经 button/tag/banner 实际渲染（非仅变量存在）。已统一为基线 lime `#cdf26b`（含 ok/warn/bad 语义色对齐）；浏览器计算样式验证：按钮背景 `rgb(205,242,107)` ✓。
 - 65/65 测试；新指纹：/app=`5fb6e616…`、/app/app.js=`11e59fcb…`、/share/index.html=`05734f06…`；走查脚本随 deploy/ 交付。
+
+## 2026-11-07 · Opus 36 缺陷修复轮（完成，66/66 测试，已部署）
+
+- **P0（BUG-01–06）**：编辑改 PATCH 原任务（不再新建）；帮我做不再双建（试运行草稿 id 被最终保存复用）；每周/工作日/每月出现时刻输入并按真实 cron 规则生成 spec（间隔仅高级）；一句话"每天 9:00"→cron 而非 540 分钟；#群名按目录解析收件人（X1 不伪造 Tag，未解析标待确认）；显式"存为草稿"状态在缺配置时保留（服务端状态优先级修复 + 回归测试）。
+- **P1（BUG-07–26）**：状态/类型筛选菜单与可移除 chips；Tag ··· 菜单（分享/改名/合并/删除）+ 新建 Tag；详情添加 Tag 菜单锚点守卫（不再一闪即关）；分享按钮接线；分享弹窗改用真实 `/tags/:id/tasks` 预览（不再永久"生成中"）；接收方视角直开 `/share/:token`；分享一个 Tag 弹 Tag 选择；剪贴板降级 fallback；列表真实任务数（liveCount）；暂停 toast 带撤销且不整页刷新；关闭图标修复（x）；输入框内 Esc 仍可关闭；空内容校验（shake + 字段错误）；复制保留 Tag/对象/标题行；执行器列表修正（Bot 移出，通知三档选中态）；快捷键全面修复（J/K/Enter 用 .trow、1–5/⌘Enter 先于输入框短路、? 帮助层）；汉堡菜单接线。
+- **P2（BUG-27–36）**：时区标签 Intl 正确计算（上海 UTC+8）；倒计时格式修复；data-icon 全站注入；agent/jira 图标映射；侧栏布局/全五类型/切换不跳转；周视图含暂停（虚线）；对象显示名而非 chatId；连接页隐藏 guest 邮箱；/apple-touch-icon.png 根挂载修复（含根 mount 边界守卫 bug——两轮修复后全资源 200）；分享页 favicon 引用。
+- **密钥处置**：走查脚本中的明文 pak key 改为 `SCHEDULE_TEST_MEMORY_KEY` 环境注入（未配置时退出 2）；**原 key 已在 memory 侧吊销**（旧 key 实测 401：health 与 write 路径均拒绝），替换 key 仅存服务器 `~/personal-schedule/.e2e-memory-key`（chmod 600，不回显、不入仓库）；服务端同步补 `GET /tags/:id/tasks`（分享预览）与 listShares liveCount。
+- 66/66 测试；部署指纹：/app=`46804e36…`、/app/app.js=`3a292ad7…`、/share/index.html=`02a5593e…`。
