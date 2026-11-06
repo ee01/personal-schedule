@@ -52,6 +52,15 @@ const api = (path, opts) => fetch(`/api/v1${path}`, {
 }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
 
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+// crypto.randomUUID() is only available in secure contexts (HTTPS / localhost);
+// on plain-HTTP origins it is undefined — fall back to getRandomValues v4.
+function uuid(){
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x)=>x.toString(16).padStart(2,'0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
 function fmtSpec(spec){
   if(!spec) return '';
   if(spec.kind==='one_shot') return `单次 · ${new Date(spec.dateTime*1000).toLocaleString()}`;
@@ -110,7 +119,7 @@ function render(){
 async function doImport(){
   const selected = [...document.querySelectorAll('input[data-i]:checked')].map((el) => state.data.tasks[+el.dataset.i].refKey);
   if (selected.length === 0) { alert('请至少勾选一个任务'); return; }
-  const requestId = 'imp-' + crypto.randomUUID();
+  const requestId = 'imp-' + uuid();
   let r = await api(`/shares/${state.token}/import`, { method: 'POST', body: JSON.stringify({ selected, requestId }) });
   if (r.body.needConfirm) {
     if (!confirm(`以下任务你已导入过：\n${r.body.duplicates.map((t)=>t.title).join('\n')}\n\n再次导入将创建额外副本，确定？`)) return;

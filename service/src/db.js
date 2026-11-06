@@ -169,6 +169,16 @@ CREATE TABLE task_create_keys (
 );
 `,
   },
+  {
+    // v3 (auth fix): sessions record which login token created them, so
+    // revoking a token also invalidates the sessions it issued. Previously a
+    // 30-day cookie stayed valid after its PAT was revoked.
+    version: 3,
+    up: `
+ALTER TABLE sessions ADD COLUMN token_id TEXT;
+CREATE INDEX idx_sessions_token ON sessions(token_id);
+`,
+  },
 ];
 
 function migrate(db) {

@@ -60,7 +60,11 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     if (!token) throw badRequest('token required');
     const user = auth.userByBearer(String(token));
     if (!user) throw badRequest('invalid token');
-    const session = auth.createSession(user.id);
+    // link the session to the login token so revoking the token also
+    // invalidates the sessions it issued (regression: 30-day cookies used to
+    // survive their PAT being revoked)
+    const tokenId = auth.tokenIdByBearer(String(token));
+    const session = auth.createSession(user.id, tokenId);
     res.setHeader('Set-Cookie', `ps_session=${session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionDays * 86400}`);
     return { user: publicUser(user) };
   });
@@ -99,6 +103,10 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const row = db.prepare('SELECT * FROM tokens WHERE id = ?').get(req.params.id);
     if (!row || row.user_id !== user.id) throw notFound();
     db.prepare('DELETE FROM tokens WHERE id = ?').run(req.params.id);
+    // token credential AND the sessions it issued become invalid now
+    // (sessions created before this linkage existed carry token_id NULL and
+    // stay until expiry — see deployment notes)
+    auth.destroySessionsForToken(req.params.id);
     return { ok: true };
   });
 

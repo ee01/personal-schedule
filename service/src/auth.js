@@ -39,16 +39,28 @@ export function createAuth(db) {
     return row || null;
   }
 
-  function createSession(userId) {
+  function tokenIdByBearer(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const row = db.prepare('SELECT id FROM tokens WHERE token_hash = ?').get(sha256Hex(raw.trim()));
+    return row?.id || null;
+  }
+
+  function createSession(userId, tokenId = null) {
     const token = newToken('pss');
     const id = sha256Hex(token);
-    db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?,?,?,?)').run(
+    db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at, token_id) VALUES (?,?,?,?,?)').run(
       id,
       userId,
       nowSec(),
       nowSec() + config.sessionDays * 86400,
+      tokenId,
     );
     return token;
+  }
+
+  function destroySessionsForToken(tokenId) {
+    if (!tokenId) return;
+    db.prepare('DELETE FROM sessions WHERE token_id = ?').run(tokenId);
   }
 
   function userBySession(token) {
@@ -65,7 +77,7 @@ export function createAuth(db) {
     if (token) db.prepare('DELETE FROM sessions WHERE id = ?').run(sha256Hex(token));
   }
 
-  return { ensureUser, issueToken, userByBearer, createSession, userBySession, destroySession };
+  return { ensureUser, issueToken, userByBearer, tokenIdByBearer, createSession, userBySession, destroySession, destroySessionsForToken };
 }
 
 // Route guards ----------------------------------------------------------
