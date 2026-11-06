@@ -131,3 +131,11 @@
 - 域名白名单改为注册门：既有账号（E 的 a@eexx.me）邮箱登录路径解锁——线上实测域门已过，仅剩发信配置门。
 - 回归：Sol 报告的攻击面全部覆盖（B 消费/无 cookie/覆盖/非访客交换/合法流/重放）+ E-case 白名单绕过；64/64。
 - 未改动桥启用条件（受信 HTTPS 前 /auth/meta.loginBridge.enabled=false）；E-184 可按契约复验。
+
+## 2026-11-06 · Resend 生产配置轮（完成）
+
+- 用户提供的 RESEND_API_KEY + 发件人 Esone@eexx.me 已写入服务器 `~/personal-schedule/service.env`（chmod 600，仅服务器；不回显/不入仓库日志附件）。deploy.sh 改为 launchd wrapper（run-service.sh, 700）source 该 env 文件——部署重跑不丢失密钥，密钥永不进 plist/仓库。zsh source 需 export 前缀（已修）。
+- 线上核验：/auth/meta `resendConfigured:true, devFallback:false`；对 a@eexx.me 最小投递请求一次 → Resend 受理（sent:true，发信域 eexx.me 在该 Resend 账号已授权——未授权域会被 403 拒绝）；实际送达由 E 查收箱确认（不读码不公布码）。60s 限频生效实测。
+- 登录顺序核验（live）：两台"设备"（独立 cookie jar）用 E 账号 PAT 登录 → userId 完全一致（usr_37dbc30b…）、merged:0、任务数一致零重复；邮箱入口按同一账号行解析（既有账号同 userId 单测已覆盖）。两种入口=同一账号，不存在"每次创建两个账号再合并"。
+- 登录桥保持禁用（loginBridge.enabled:false）——受信 HTTPS 是独立条件，邮件配置不改变它。
+- 剩余：E 确认邮件实际送达并完成一次邮箱登录；受信 HTTPS（阿里云 DNS key 或公司域流程）；跨扩展 PAT 冲突处理（Sol）。
