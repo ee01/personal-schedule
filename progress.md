@@ -105,3 +105,12 @@
 - **分享页 randomUUID 兼容**：uuid() 带 getRandomValues 回退。live 验证（非本地明文 HTTP 源，isSecureContext=false、randomUUID undefined）：uuid() 产出合法 v4、零 JS 错误，导入可点击不再抛错。
 - **HTTPS**：核验结论——公网 DNS 指向内网 IP，HTTP-01/TLS-ALPN 必然失败；NPM 无 DNS 插件；本机仅 *.int.rclabenv.com 有受信通配证书（公司管理、密钥不在本机）。可行路径 A：DNS-01（阿里云 API，需 E 提供 AccessKey，脚本 deploy/issue-cert.sh 已备好）；路径 B：公司 int.rclabenv.com 域名/证书流程。未跳过任何证书校验。
 - 已部署；身份主干方案（邮箱验证码/Google OAuth/恢复码）保持候选待用户选择。
+
+## 2026-11-06 · 鉴权主干实现（用户已批准方案：邮箱验证码 + 扩展自动登录 + 访客即用）
+
+- 邮箱一次性验证码（Resend）：/auth/email/request + /auth/email/verify；6 位码哈希存储、10 分钟 TTL、60s 重发限频、5 次尝试上限；域名白名单默认 @ringcentral.com；RESEND_API_KEY/RESEND_FROM_EMAIL 环境配置，未配 key 时开发回退（码只写服务器日志，UI 如实标注，绝不下发客户端）。
+- 访客即用 + 合并：/auth/guest 自动创建访客账号；顶栏"访客模式 + 保存并登录"；邮箱/PAT 登录时自动把访客任务与运行记录并入真实账号（连接不迁移），访客账号清理。
+- 扩展登录通道：页面收 v1 'ready' 公告后可发 {type:'login-request'}；扩展在隔离世界自行完成同源登录（PAT 不进页面 JS）——E-184 侧接口已文档化。
+- 登录页重构：邮箱验证码 / 扩展登录 / 令牌（高级）三入口。
+- 回归测试 3 项（56/56）；Playwright E2E 全流程零 JS 错误（08-auth-guest-merge.png）。
+- 已部署 schedule.xmnup.com：/auth/meta 确认 emailLogin:true、domains=[ringcentral.com]、devFallback（待 RESEND_API_KEY 置换为邮件发送）。
