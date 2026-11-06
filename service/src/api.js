@@ -57,7 +57,7 @@ function describeRole(type, cfg) {
       channel: 'personal-schedule-extension-v1',
       announcementType: 'ready',
       targetOrigin: 'window-origin',
-      minExtensionVersion: '0.1.0',
+      minExtensionVersion: config.extMinVersion,
     },
     // empty string = install URL not yet configured for this deployment
     // (the share page falls back to a generic install-guide card)

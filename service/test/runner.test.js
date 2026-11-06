@@ -334,3 +334,23 @@ test('renderContentVars substitutes date/time/datetime/weekday/title; unknown va
   const sameDate = out.match(/(\d{4}\/\d{2}\/\d{2})/g);
   assert.equal(new Set(sameDate).size, 1, 'all date occurrences consistent');
 });
+
+
+// E-184 install entry: minExtensionVersion is deployment-configurable
+test('extension info serves the configured minimum version and handshake channel', async () => {
+  const { buildApp } = await import('../src/http.js');
+  const { openDb } = await import('../src/db.js');
+  const db = openDb(':memory:');
+  const { buildServices } = await import('../src/server.js');
+  const services = buildServices(db);
+  const calls = [];
+  const app = { get: (p, h) => calls.push([p, h]), post(){}, put(){}, patch(){}, delete(){} };
+  const { registerRoutes } = await import('../src/api.js');
+  registerRoutes(app, { db, ...services });
+  const info = calls.find(([p]) => p === '/api/v1/extension/info');
+  assert.ok(info, 'route registered');
+  const body = await info[1]({});
+  assert.equal(body.handshake.channel, 'personal-schedule-extension-v1');
+  assert.ok(typeof body.handshake.minExtensionVersion === 'string' && body.handshake.minExtensionVersion.length > 0);
+  assert.equal(body.schemaVersion, 1);
+});

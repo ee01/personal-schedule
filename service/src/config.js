@@ -37,6 +37,10 @@ export const config = {
   // Extension install entry (share page install guide). The real Chrome Web
   // Store / CRX URL is deployment-specific; set SCHEDULE_EXT_INSTALL_URL.
   extInstallUrl: process.env.SCHEDULE_EXT_INSTALL_URL || '',
+  // E-184 install entry: the FIRST verifiably compatible published version
+  // (verified via deploy/verify-ext-crx.mjs). '0.1.0' accepts the handshake
+  // from any build; converge it only once the store package passes checks.
+  extMinVersion: process.env.SCHEDULE_EXT_MIN_VERSION || '0.1.0',
   // Email one-time-code login (chosen identity backbone). RESEND_API_KEY /
   // RESEND_FROM_EMAIL provision the mailer (Resend); without a key the codes
   // are logged server-side only (dev fallback, clearly surfaced — never
