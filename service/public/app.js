@@ -484,7 +484,7 @@ function cfStep3() {
   // 帮我做（C7：执行器 + 运行通知 + 发布产出）
   return `<div class="field"><label>执行器</label><div class="choice-col" id="execList">
     <button class="choice" data-exec="default">默认执行器<span class="muted">（Memory Service）</span></button>
-    ${S.bots.configured ? '<button class="choice" data-exec="bot">值班 Bot（已校验）</button>' : '<div class="muted" style="padding:4px 2px">值班 Bot 未连接——可到「连接与执行器」页面添加</div>'}</div></div>
+    ${S.bots.configured ? '<button class="choice" data-exec="bot">值班 Bot（已校验）</button>' : ''}</div></div>
   <div class="field"><label>运行通知 → 通知我</label><div class="seg" id="notifySeg"><button class="seg-b ${(CF.notifyMode||'every')==='every'?'on':''}" data-nm="every">每次完成</button><button class="seg-b ${(CF.notifyMode||'every')==='failures'?'on':''}" data-nm="failures">仅失败</button><button class="seg-b ${(CF.notifyMode||'every')==='off'?'on':''}" data-nm="off">关闭</button></div>
     <div class="preview muted" id="notifyPrev"></div></div>
   <div class="field"><span class="label">发布任务产出 → 发送到联系人/群组</span>
@@ -808,13 +808,16 @@ async function drawerAction(id, op) {
     if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).map((m) => missingLabel(m)).join('、'), { kind: 'err', stay: 8000 });
     else { await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); toast('已启用', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); await refresh(); render(); } }); }
     return; }
-  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }] : []), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
+  const recipsFrom = (t) => t.config?.recipients?.length ? t.config.recipients
+    : (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }]
+    : (t.config?.pendingRecipient ? [{ raw: t.config.pendingRecipient, unresolved: true }] : []));
+  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
     // BUG-21: editing starts at the content step — the type is already known
     CF.step = 2; renderModal(); return; }
   if (op === 'copy') {
     const t = DETAIL.task; const sp = taskSpec(t);
     newFlow(t.type, { title: t.title + '（副本）', content: t.content, spec: sp,
-      recipients: t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || t.config.chatId }] : []),
+      recipients: recipsFrom(t),
       identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory',
       publish: t.notify?.publish || { enabled: false, recipients: [], source: 'template', template: [] },
       tags: (t.tags || []).map((g) => g.id) });
@@ -1007,23 +1010,42 @@ function previewNext() {
   if (!s) { el.innerHTML = '时间规则还不完整——选择频率并填好时刻/日期后这里会显示下一次运行'; return; }
   el.innerHTML = '下一次运行：' + fmtNext(s.dateTime || nextAtForCron(s)) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
 }
+function wallInTz(tz, epochMs) {
+  // wall-clock fields of an instant, read in the spec's timezone
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const o = {}; for (const part of dtf.formatToParts(new Date(epochMs))) o[part.type] = +part.value;
+  return { y: o.year, mo: o.month, d: o.day, h: o.hour % 24, mi: o.minute };
+}
+function epochFromWall(tz, wall) {
+  // epoch of a wall-clock time in tz (DST-safe two-pass)
+  const asUTC = Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi);
+  const w = wallInTz(tz, asUTC);
+  const offset = Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi) - asUTC;
+  return Math.floor((asUTC - offset) / 1000);
+}
 function nextAtForCron(s) {
-  // next firing of a cron spec; handles 5-field (mi hh dom mo dow) and
-  // 6-field (sec mi hh dom mo dow) expressions
+  // BUG-03: next firing of a cron spec computed in the SPEC's timezone, same
+  // rule the server schedules with; monthly (dom) matches can be up to a
+  // year away, so scan 400 days instead of 8 (the old preview showed "—"
+  // whenever the next run was more than a week out)
   const raw = (s.expr || '0 9 * * *').trim().split(/\s+/);
   const p = raw.length === 6 ? raw.slice(1) : raw;
+  const tz = s.timezone || 'Asia/Shanghai';
   const mi = Number(p[0]) || 0, h = Number(p[1]) || 0;
   const dom = p[2] && p[2] !== '*' ? Number(p[2]) : null;
   const dows = p[4] && p[4] !== '*' ? p[4].split(',').flatMap((tok) => {
     if (tok.includes('-')) { const [a, b] = tok.split('-').map(Number); return Array.from({ length: b - a + 1 }, (_, i2) => a + i2); }
     return [Number(tok)];
   }) : null;
-  for (let i = 0; i < 8; i += 1) {
-    const d = new Date(Date.now() + i * 864e5);
-    if (dom && d.getDate() !== dom) continue;
-    if (dows && !dows.includes(d.getDay())) continue;
-    const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, 0).getTime();
-    if (t > Date.now()) return Math.floor(t / 1000);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const limit = dom ? 400 : 8;
+  for (let i = 0; i <= limit; i += 1) {
+    const probe = Date.now() + i * 864e5;
+    const w = wallInTz(tz, probe);
+    if (dom && w.d !== dom) continue;
+    if (dows && !dows.includes(new Date(Date.UTC(w.y, w.mo - 1, w.d)).getUTCDay())) continue;
+    const t = epochFromWall(tz, { y: w.y, mo: w.mo, d: w.d, h, mi });
+    if (t > nowSec) return t;
   }
   return null;
 }
@@ -1042,13 +1064,23 @@ async function nextCf() {
   CF.step += 1; renderModal();
 }
 async function saveTask(finalStatus) {
+  // BUG-41: single-flight — rapid double clicks must not create two tasks
+  if (CF.saving) return;
+  CF.saving = true;
+  try { return await saveTaskInner(finalStatus); } finally { CF.saving = false; }
+}
+async function saveTaskInner(finalStatus) {
   // BUG-03: preview, confirm and save share one rule (CF.time). An incomplete
   // rule blocks the save — never a silent rate-1440 fallback.
   const spec = currentSpec();
   if (!spec) { toast('时间规则还不完整——请到「时间」步骤选择频率并填好时刻', { kind: 'err' }); CF.step = 4; renderModal(); return; }
-  // BUG-05: unresolved text never becomes a deliverable id; the original
-  // input stays in the flow and the user is sent to fix it
-  if (['asme','bot','ai_report'].includes(CF.type)) {
+  // BUG-05/41: the recipient gate is an EXECUTION gate — only 排程/启用 must
+  // block; drafts are allowed to be incomplete (missing shows as 待补全)
+  const target0 = CF.editing || CF.lastDraftId;
+  const cur0 = target0 ? S.tasks.find((t) => t.id === target0) : null;
+  const activates = finalStatus === 'active' || (!target0 && finalStatus !== 'draft')
+    || (finalStatus !== 'draft' && cur0 && ['draft','inactive'].includes(cur0.status) && !(cur0.missing || []).length);
+  if (activates && ['asme','bot','ai_report'].includes(CF.type)) {
     const bad = (CF.recipients || []).filter((r) => r.unresolved || !r.id);
     if (!CF.recipients.length || bad.length) {
       toast('收件人还未解析（原文已保留）——请在对象步骤从目录中选择真实对象', { kind: 'err', stay: 8000 });
@@ -1058,8 +1090,11 @@ async function saveTask(finalStatus) {
   const config = { ...(CF.config || {}) };
   if (['asme','bot','ai_report'].includes(CF.type)) {
     const r = CF.recipients[0] || {};
-    config.chatId = r.id;
+    // BUG-41/05: unresolved text is kept as a pending input for later
+    // completion — it never masquerades as a deliverable chatId
+    config.chatId = r.id || null;
     config.chatName = r.name || null; // BUG-33: keep the resolved display name
+    if (!r.id && r.raw) config.pendingRecipient = r.raw; else delete config.pendingRecipient;
   }
   if (CF.type === 'agent_task') { config.executor = CF.executor === 'bot' ? 'memory' : CF.executor; config.mode = CF.mode; config.sender = CF.identity; }
   if (CF.type === 'outreach') config.template = { question: $('#cfContent')?.value || CF.content, goal: $('#cfGoal')?.value || '', maxFollowup: +($('#cfMax')?.value || 2), followupIntervalSeconds: +($('#cfGap')?.value || 7200), recipients: CF.recipients.map((r) => ({ targetType: 'user', targetRef: r.id })) };
@@ -1070,17 +1105,12 @@ async function saveTask(finalStatus) {
   let r;
   const target = CF.editing || CF.lastDraftId;
   if (target) {
-    // BUG-06: an explicit draft stays a draft; an explicit activate is honored
-    // (the server re-gates incomplete setups to inactive); a plain edit keeps
-    // the task's current status instead of silently drifting it
+    // BUG-06/41: explicit draft / explicit activate; a plain edit NEVER drifts
+    // status (a draft missing its Memory connection stays a draft)
     const patch = { ...body };
     if (finalStatus === 'draft') patch.status = 'draft';
     else if (finalStatus === 'active') patch.status = 'active';
-    else {
-      const cur = S.tasks.find((t) => t.id === target);
-      if (cur && ['draft','inactive'].includes(cur.status)) patch.status = 'active';
-      else delete patch.status;
-    }
+    else delete patch.status;
     r = await api(`/tasks/${target}`, { method: 'PATCH', body: patch });
   } else {
     r = await api('/tasks', { method: 'POST', body: { ...body, idempotencyKey: 'cf-' + uuid() } });
@@ -1101,7 +1131,13 @@ async function doTrial() {
   } else { me.textContent = '试运行失败'; }
 }
 function closeCf(autoDraft) {
-  if (autoDraft && !CF.editing && !CF.lastDraftId && CF.step < 5 && (CF.oneLine || CF.title || CF.content)) { saveTask('draft').then((id) => { CF = null; renderModal(); toast('草稿已自动保存', { undo: async () => { if (id) await api('/tasks/' + id, { method: 'DELETE' }); location.reload(); } }); return; }); return; }
+  if (autoDraft && !CF.editing && !CF.lastDraftId && CF.step < 5 && (CF.oneLine || CF.title || CF.content)) {
+    saveTask('draft').then((id) => {
+      if (!id) return; // BUG-41: keep the flow open on failure — nothing was saved
+      CF = null; renderModal(); toast('草稿已自动保存', { undo: async () => { await api('/tasks/' + id, { method: 'DELETE' }); location.reload(); } });
+    });
+    return;
+  }
   CF = null; renderModal();
 }
 function wireSharePage() {
@@ -1225,8 +1261,12 @@ function wireCfFooter(){
     if (t.hasAttribute('data-prev')) { CF.step = Math.max(1, CF.step - 1); return renderModal(); }
     if (t.hasAttribute('data-next')) return nextCf();
     if (t.hasAttribute('data-savedraft')) {
-      const id = await saveTask('draft'); closeCf(); await refresh(); render();
-      toast('已存为草稿', { undo: async () => { if (id) { await api('/tasks/' + id, { method: 'DELETE' }); await refresh(); render(); } } });
+      // BUG-41: only close + toast after the save REALLY succeeded; on
+      // failure the flow stays open with the content intact and the error
+      const id = await saveTask('draft');
+      if (!id) return;
+      closeCf(); await refresh(); render();
+      toast('已存为草稿', { undo: async () => { await api('/tasks/' + id, { method: 'DELETE' }); await refresh(); render(); } });
       return;
     }
     if (t.hasAttribute('data-finish')) {

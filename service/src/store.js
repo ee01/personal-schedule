@@ -204,7 +204,10 @@ export function createTaskStore(db, getConnection) {
     } else if (patch.status === 'active') {
       status = missing.length ? 'inactive' : 'active';
     } else if (missing.length) {
-      status = 'inactive';
+      // BUG-06: editing an incomplete DRAFT keeps it a draft (drafts never
+      // execute, so the setup gap must not demote the user's choice);
+      // executable statuses fall back to inactive as before
+      status = task.status === 'draft' ? 'draft' : 'inactive';
     } else if (status === 'inactive') {
       status = 'paused'; // completed config, but requires explicit enable
     }

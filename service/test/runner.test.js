@@ -254,3 +254,18 @@ test('PATCH without status keeps an active task active (plain edit never drifts 
   });
   assert.equal(edited.status, 'active', 'editing must not pause/demote an active task');
 });
+
+
+// BUG-06 (round 5): a plain PATCH edit of an incomplete DRAFT keeps it a draft
+test('plain PATCH edit keeps an incomplete draft a draft (帮我做 without Memory)', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx, { type: 'agent_task', status: 'draft', config: { executor: 'memory', mode: 'read' } });
+  assert.equal(task.status, 'draft');
+  const edited = ctx.store.updateTask(ctx.user.id, task.id, {
+    title: 'edited draft', content: 'still here',
+    scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' },
+    config: { executor: 'memory', mode: 'read' },
+  });
+  assert.equal(edited.status, 'draft', 'missing Memory must not demote a draft to inactive');
+  assert.ok(edited.missing.includes('connection:memory'));
+});
