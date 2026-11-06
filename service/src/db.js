@@ -207,6 +207,16 @@ CREATE TABLE login_bridges (
 );
 `,
   },
+  {
+    // v6 (integration findings): a bridge nonce is bound to the registering
+    // SESSION — the exchange must present the same session cookie, consumed
+    // atomically. Previously any caller (or no caller at all) could consume
+    // someone else's registered nonce.
+    version: 6,
+    up: `
+ALTER TABLE login_bridges ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
+`,
+  },
 ];
 
 function migrate(db) {

@@ -8,7 +8,7 @@ import {
   requireUser, bearerToken,
 } from './auth.js';
 import {
-  badRequest, notFound, forbidden, parseJson, nowSec, newId,
+  badRequest, notFound, forbidden, parseJson, nowSec, newId, sha256Hex,
 } from './util.js';
 import { createTaskStore, CREATABLE_TYPES } from './store.js';
 import { nextRunAt } from './time.js';
@@ -99,33 +99,73 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
   // PAT (only the extension holds it) and rotates the old session away.
   // The PAT never enters page JS. Disabled until trusted HTTPS is live
   // (SCHEDULE_AUTH_LOGIN_BRIDGE=1).
+  function bridgeOriginOk(req) {
+    // defense in depth on top of SameSite=Lax: when a browser sends an Origin
+    // header for these endpoints it must be this service's public origin
+    const origin = req.headers.origin;
+    if (!origin) return true; // non-browser callers (extension background)
+    const base = publicBaseUrl();
+    if (base && origin === base) return true;
+    return origin === `http://127.0.0.1:${config.port}` || origin === `http://localhost:${config.port}`;
+  }
+
+  function currentSessionId(req) {
+    const cookies = req.headers.cookie || '';
+    const match = cookies.match(/ps_session=([^;]+)/);
+    return match ? sha256Hex(match[1]) : null;
+  }
+
   app.post('/api/v1/auth/bridge/register', (req) => {
     if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
+    if (!bridgeOriginOk(req)) throw badRequest('origin 不匹配');
     const user = requireUser(db, auth, req);
     const nonce = String(req.body?.nonce || '').trim();
     if (!nonce || nonce.length < 16 || nonce.length > 128) throw badRequest('nonce required (16-128 chars)');
     if (user.is_guest !== 1) throw badRequest('仅访客会话需要扩展登录（已登录用户无需此流程）');
+    const sessionId = currentSessionId(req);
+    if (!sessionId) throw badRequest('会话缺失');
     db.prepare('DELETE FROM login_bridges WHERE expires_at < ?').run(nowSec());
-    db.prepare('INSERT OR REPLACE INTO login_bridges (nonce, expires_at) VALUES (?,?)').run(
-      nonce, nowSec() + config.authBridgeNonceTtlSec,
-    );
+    // first registration wins: another session can never re-bind/overwrite an
+    // already-registered nonce
+    try {
+      db.prepare('INSERT INTO login_bridges (nonce, expires_at, session_id) VALUES (?,?,?)').run(
+        nonce, nowSec() + config.authBridgeNonceTtlSec, sessionId,
+      );
+    } catch {
+      throw badRequest('nonce 已被登记（归属其他会话）');
+    }
     return { registered: true, ttlSec: config.authBridgeNonceTtlSec };
   });
 
   app.post('/api/v1/auth/bridge/exchange', async (req, res) => {
     if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
+    if (!bridgeOriginOk(req)) throw badRequest('origin 不匹配');
     const nonce = String(req.body?.nonce || '').trim();
     if (!nonce || nonce.length > 128) throw badRequest('nonce required');
     const pat = bearerToken(req);
-    const user = pat ? auth.userByBearer(pat) : null;
-    if (!user) throw badRequest('invalid token');
+    const patUser = pat ? auth.userByBearer(pat) : null;
+    if (!patUser) throw badRequest('invalid token');
+    // correlation: the exchange must come from the SAME browser session that
+    // registered the nonce (the extension's fetch shares the page cookie jar),
+    // and that session must be the guest that initiated the flow. Consumed
+    // atomically — no cross-session / cookieless consumption, no overwrite.
+    const sessionId = currentSessionId(req);
+    if (!sessionId) throw badRequest('缺少发起会话');
+    const binding = db
+      .prepare('SELECT session_id FROM login_bridges WHERE nonce = ? AND expires_at > ?')
+      .get(nonce, nowSec());
+    if (!binding) throw badRequest('nonce 无效或已使用');
+    const sessionUser = auth.userBySession((req.headers.cookie.match(/ps_session=([^;]+)/) || [])[1]);
+    if (!sessionUser || sessionUser.is_guest !== 1) {
+      throw badRequest('发起会话不是访客会话（已登录用户无需扩展登录）');
+    }
     const consumed = db
-      .prepare('DELETE FROM login_bridges WHERE nonce = ? AND expires_at > ?')
-      .run(nonce, nowSec());
+      .prepare('DELETE FROM login_bridges WHERE nonce = ? AND session_id = ? AND expires_at > ?')
+      .run(nonce, sessionId, nowSec());
     if (consumed.changes === 0) throw badRequest('nonce 无效或已使用');
-    const merged = mergeGuestOnLogin(req, user.id);
-    rotateSession(req, res, user.id, auth.tokenIdByBearer(pat));
-    return { user: publicUser(user), ...merged };
+    const merged = mergeGuestOnLogin(req, patUser.id);
+    rotateSession(req, res, patUser.id, auth.tokenIdByBearer(pat));
+    return { user: publicUser(patUser), ...merged };
   });
 
   app.post('/api/v1/auth/email/verify', async (req, res) => {

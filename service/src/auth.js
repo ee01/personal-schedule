@@ -65,10 +65,15 @@ export function createAuth(db) {
 
   // ---------------------------------------------------------- email login
 
+  // Registration is domain-restricted; EXISTING accounts always pass —
+  // E's own account (a@eexx.me) predates the allowlist and must keep its
+  // email login path.
   function allowedEmail(raw) {
     const email = String(raw || '').trim().toLowerCase();
     const at = email.indexOf('@');
     if (at < 1 || at === email.length - 1) return null;
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existing) return email;
     const domain = email.slice(at + 1);
     if (config.authAllowedDomains.length && !config.authAllowedDomains.includes(domain)) return null;
     return email;

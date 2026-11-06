@@ -22,10 +22,14 @@ async function fresh() {
   const user = services.auth.ensureUser('auth@example.com');
   const server = await listen(app, { port: 0, host: '127.0.0.1' });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const req = async (method, url, { body, cookie } = {}) => {
+  const req = async (method, url, { body, cookie, headers } = {}) => {
     const response = await fetch(base + url, {
       method,
-      headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: {
+        ...(cookie ? { cookie } : {}),
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(headers || {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const setCookie = response.headers.get('set-cookie');
@@ -322,6 +326,90 @@ test('legacy sessions (pre-v3, token_id NULL) survive token revocation — docum
     assert.equal(del.statusCode, 200);
     // the legacy session keeps running until expiry — documented exception
     assert.equal((await ctx.req('GET', '/api/v1/me', { cookie })).statusCode, 200);
+  } finally {
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('bridge nonce binding: only the registering session can consume (integration findings)', async () => {
+  const { config } = await import('../src/config.js');
+  const saved = config.authLoginBridgeEnabled;
+  config.authLoginBridgeEnabled = true; // simulate HTTPS-ready deployment
+  const ctx = await fresh();
+  try {
+    const nonce = 'integration-findings-nonce-0123456789';
+    // A: guest session registers the nonce
+    const ga = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookieA = ga.headers['set-cookie'][0].split(';')[0];
+    const reg = await ctx.req('POST', '/api/v1/auth/bridge/register', { cookie: cookieA, body: { nonce } });
+    assert.equal(reg.statusCode, 200, 'A registers its nonce');
+
+    // B's PAT
+    const pat = ctx.services.auth.issueToken(ctx.user.id, 'bridgeB');
+
+    // B (different guest session) tries to consume A's nonce → refuse
+    const gb = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookieB = gb.headers['set-cookie'][0].split(';')[0];
+    const stealRaw = await ctx.req('POST', '/api/v1/auth/bridge/exchange', { cookie: cookieB, body: { nonce } });
+    assert.equal(stealRaw.statusCode, 400, 'another session cannot consume the nonce');
+
+    // cookieless caller cannot consume either
+    const bare = await ctx.req('POST', '/api/v1/auth/bridge/exchange', { body: { nonce } });
+    assert.equal(bare.statusCode, 400, 'cookieless exchange refused');
+
+    // another session cannot overwrite A's binding (re-register same nonce)
+    const takeover = await ctx.req('POST', '/api/v1/auth/bridge/register', { cookie: cookieB, body: { nonce } });
+    assert.equal(takeover.statusCode, 400, 'nonce binding cannot be overwritten by another session');
+
+    // an already-logged-in (non-guest) session cannot exchange A's nonce
+    const login = await ctx.req('POST', '/api/v1/auth/login', { body: { token: pat } });
+    const realCookie = login.headers['set-cookie'][0].split(';')[0];
+    const nonguest = await ctx.req('POST', '/api/v1/auth/bridge/exchange', { cookie: realCookie, body: { nonce } });
+    assert.equal(nonguest.statusCode, 400, 'non-guest session cannot exchange');
+
+    // the legitimate flow still works: the extension (PAT) exchanges with A's cookie
+    const ok = await ctx.req('POST', '/api/v1/auth/bridge/exchange', {
+      cookie: cookieA,
+      headers: { Authorization: `Bearer ${pat}` },
+      body: { nonce },
+    });
+    assert.equal(ok.statusCode, 200, 'the registering session + PAT exchange succeeds');
+    const okBody = await ok.json();
+    assert.equal(okBody.user.id, ctx.user.id, 'PAT user logged in');
+
+    // replay: the nonce is consumed — even the legitimate pair cannot reuse it
+    const replay = await ctx.req('POST', '/api/v1/auth/bridge/exchange', {
+      cookie: cookieA,
+      headers: { Authorization: `Bearer ${pat}` },
+      body: { nonce },
+    });
+    assert.equal(replay.statusCode, 400, 'nonce single-use');
+  } finally {
+    config.authLoginBridgeEnabled = saved;
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
+test('existing account with a non-allowlist domain (E case) keeps its email login path', async () => {
+  const ctx = await fresh();
+  try {
+    const existing = ctx.services.auth.ensureUser('e.owner@eexx.me');
+    // new registrations outside the allowlist are still refused
+    const freshAttempt = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'stranger@example.org' } });
+    assert.equal(freshAttempt.statusCode, 400);
+    // but the pre-existing account passes the gate
+    const req = await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'e.owner@eexx.me' } });
+    assert.equal(req.statusCode, 200, 'existing account email not blocked by registration allowlist');
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('e.owner@eexx.me');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { body: { email: 'e.owner@eexx.me', code } });
+    const body = await v.json();
+    assert.equal(v.statusCode, 200);
+    assert.equal(body.user.id, existing.id, 'existing account email login returns the same user');
   } finally {
     await new Promise((r2) => ctx.server.close(r2));
   }
