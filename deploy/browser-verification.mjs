@@ -2,6 +2,11 @@
 // Prereq: local Schedule on :3987 wired to the production memory (68425cfc).
 import { chromium } from '/Users/Esone/.npm/_npx/9833c18b2d85bc59/node_modules/playwright/index.mjs';
 
+// controlled-verification key is env-injected (never hardcoded in the repo)
+const TEST_KEY = process.env.SCHEDULE_TEST_MEMORY_KEY;
+if (!TEST_KEY) { console.error('SCHEDULE_TEST_MEMORY_KEY is not set — refusing to run with hardcoded credentials'); process.exit(2); }
+
+
 const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
 const browser = await chromium.launch({ executablePath: EXE });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -18,7 +23,7 @@ const call = async (p, opts = {}) => fetch('http://127.0.0.1:3987/api/v1' + p, {
 const g = await call('/auth/guest', { method: 'POST', body: {} });
 const cookie = g.cookie ? g.cookie.split(';')[0] : null;
 const H = { Cookie: cookie };
-await call('/connections/memory', { method: 'PUT', headers: H, body: { value: { baseUrl: 'http://10.32.56.212:3210', userKey: 'pak.Z2xtLXNjaGVkLWl0ZXN0.Svl5h0f4Y8synuI3JXcaqoQY6sTNXbCEMjXOOV0pHPA' } } });
+await call('/connections/memory', { method: 'PUT', headers: H, body: { value: { baseUrl: 'http://10.32.56.212:3210', userKey: TEST_KEY } } });
 
 // 2. outreach task due in ~10s (runner ticks every 20s — allow up to 40s)
 const at = Math.floor(Date.now() / 1000) + 10;

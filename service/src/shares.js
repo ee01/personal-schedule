@@ -141,7 +141,15 @@ export function createShares(db, { getConnections }) {
     return db
       .prepare('SELECT * FROM shares WHERE owner_user_id = ? ORDER BY created_at DESC')
       .all(userId)
-      .map(publicShareMeta);
+      .map((share) => ({
+        ...publicShareMeta(share),
+        // BUG-16: live task count under the shared tag (draft/inactive count too)
+        liveCount: db
+          .prepare('SELECT COUNT(*) n FROM tasks t JOIN task_tags tt ON tt.task_id = t.id WHERE tt.tag_id = ? AND t.user_id = ?')
+          .get(share.tag_id, userId).n,
+      tagId: share.tag_id,
+        color: db.prepare('SELECT color FROM tags WHERE id = ?').get(share.tag_id)?.color || '#cdf26b',
+      }));
   }
 
   function revokeShare(userId, token) {

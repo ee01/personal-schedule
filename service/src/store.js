@@ -141,7 +141,9 @@ export function createTaskStore(db, getConnection) {
       type,
       title: input.title,
       content: input.content || '',
-      status: missing.length ? 'inactive' : input.status === 'draft' ? 'draft' : input.status === 'paused' ? 'paused' : 'active',
+      // BUG-06 fix: an explicit draft choice survives missing config; only
+      // unspecified statuses fall back to inactive when setup is incomplete
+      status: input.status === 'draft' ? 'draft' : missing.length ? 'inactive' : input.status === 'paused' ? 'paused' : 'active',
       schedule_spec: JSON.stringify(scheduleSpec),
       config: JSON.stringify(config),
       notify: JSON.stringify(normalizeNotify(notify, type)),

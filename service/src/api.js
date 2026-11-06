@@ -22,6 +22,15 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
 
   const json = (value) => JSON.stringify(value);
 
+function describeRole(type, cfg) {
+  const list = cfg.recipients || (cfg.chatId ? [{ id: cfg.chatId, name: cfg.chatName || cfg.chatId }] : []);
+  if (type === 'agent_task' && cfg.notify && cfg.notify.publish && cfg.notify.publish.recipients) {
+    return (cfg.notify.publish.recipients || []).map((r) => r.name || r.id).join('、');
+  }
+  if (type === 'outreach' && cfg.template && cfg.template.recipients) return (cfg.template.recipients || []).map((r) => r.name || r.targetRef || r.id).join('、');
+  return list.map((r) => r.name || r.id).join('、');
+}
+
   // ------------------------------------------------------------ health/meta
   app.get('/api/v1/health', () => ({
     status: 'ok',
@@ -608,6 +617,32 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     // surface 409 as an explicit conflict signal: the client refreshes and
     // lets the user click again with a fresh requestId; never auto-retries
     return { forwarded: response.ok, status: response.status, conflict: response.status === 409, body: parseJson(payload, payload.slice(0, 500)) };
+  });
+
+  // share modal preview source (BUG-12): the tasks currently in a Tag as
+  // sanitized template views (same shape as the share view items)
+  app.get('/api/v1/tags/{id}/tasks', (req) => {
+    const user = requireUser(db, auth, req);
+    const tag = db.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(req.params.id, user.id);
+    if (!tag) throw notFound('tag not found');
+    const rows = db
+      .prepare(`SELECT t.* FROM tasks t JOIN task_tags tt ON tt.task_id = t.id
+         WHERE tt.tag_id = ? AND t.user_id = ? ORDER BY t.created_at DESC`,)
+      .all(req.params.id, user.id)
+      .map((task) => {
+        const cfg = parseJson(task.config, {});
+        return {
+          refKey: task.ref_key || task.id,
+          type: task.type,
+          title: task.title,
+          content: task.content,
+          scheduleSpec: parseJson(task.schedule_spec, {}),
+          executorTypeHint: cfg.executor || null,
+          recipientRole: describeRole(task.type, cfg),
+          sensitivity: null,
+        };
+      });
+    return { tagId: tag.id, tagName: tag.name, tasks: rows };
   });
 
   // ------------------------------------------------------------ connections

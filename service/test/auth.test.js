@@ -512,3 +512,19 @@ test('directory/bots/timeline-projects endpoints (X1/X3/X4) with a mock RC', asy
     await new Promise((r2) => ctx.server.close(r2));
   }
 });
+
+
+test('BUG-06: explicit draft status survives missing config (single-device)', async () => {
+  const ctx = await fresh();
+  try {
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookie = g.headers['set-cookie'][0].split(';')[0];
+    const created = await ctx.req('POST', '/api/v1/tasks', { cookie, body: {
+      type: 'asme', title: '草稿保持验证', content: 'x',
+      scheduleSpec: { kind: 'rate', intervalMinutes: 1440, timezone: 'Asia/Shanghai' },
+      config: {}, status: 'draft', // no chatId → missing config
+    } });
+    assert.equal(created.statusCode, 200);
+    assert.equal((await created.json()).task.status, 'draft', 'draft status must not be silently downgraded to inactive');
+  } finally { await new Promise((r2) => ctx.server.close(r2)); }
+});

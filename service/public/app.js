@@ -60,6 +60,9 @@ function renderCrumb() {
   $('#crumb').innerHTML = `${label}${sub ? ` <span class="muted">/ ${esc(sub)}</span>` : ''}`;
   $('#searchBox').style.display = S.view === 'tasks' ? '' : 'none';
   $('#menuToggle').style.display = '';
+  const mt = $('#menuToggle');
+  if (mt && !mt.innerHTML.trim()) mt.innerHTML = ic('menu');
+  if (mt) mt.onclick = () => { $('#sidebar').classList.toggle('open'); document.body.classList.toggle('side-open'); };
 }
 
 /* ========================================================= 侧栏（N1–N7, A1） */
@@ -90,9 +93,10 @@ function renderSidebar() {
     <div class="conn-dots" id="connDots" title="连接状态（点击进入连接与执行器）"></div>
   </div>`;
   const list = [];
-  if (!tagPart && !typePart) list.push(`<a class="nav-sub" data-nav="tasks/ungrouped">未分组<span class="count">${countBy((t)=>!(t.tags||[]).length)}</span></a>`);
-  if (!typePart) for (const tag of S.tags) list.push(`<a class="nav-sub ${tagPart===tag.id?'active':''}" data-nav="tasks/tag:${tag.id}"><span class="tdot" style="background:${tag.color}"></span>${esc(tag.name)}<span class="count">${countBy((t)=>t.tags?.some(x=>x.id===tag.id))}</span></a>`);
-  if (!tagPart) for (const ty of TYPE_ORDER) { const n = countBy((t)=>t.type===ty); if (n) list.push(`<a class="nav-sub ${typePart===ty?'active':''}" data-nav="tasks/type:${ty}">${typeIc(ty)}${esc(TYPE_LABEL[ty].split(' ')[0])}<span class="count">${n}</span></a>`); }
+  if (!tagPart && !typePart) list.push('<div class="nav-sub"><a data-nav="tasks/ungrouped">未分组<span class="count">' + countBy((t)=>!(t.tags||[]).length) + '</span></a></div>');
+  for (const tag of S.tags) list.push('<div class="nav-sub ' + (tagPart===tag.id?'active':'') + '"><a data-nav="tasks/tag:' + tag.id + '"><span class="tdot" style="background:' + (tag.color||'#cdf26b') + '"></span>' + esc(tag.name) + '<span class="count">' + countBy((t)=>t.tags?.some(x=>x.id===tag.id)) + '</span></a><button class="btn ghost icon menu-trigger" data-tagmenu="' + tag.id + '" aria-label="Tag 菜单">' + ic('more') + '</button></div>');
+  // BUG-31: type view lists ALL five types (including zero counts)
+  if (!tagPart) for (const ty of TYPE_ORDER) { const n = countBy((t)=>t.type===ty); list.push('<a class="nav-sub ' + (typePart===ty?'active':'') + '" data-nav="tasks/type:' + ty + '">' + typeIc(ty) + esc(TYPE_LABEL[ty].split(' ')[0]) + '<span class="count">' + n + '</span></a>'); }
   $('#tagList').innerHTML = list.join('');
   // 连接状态点（N6）：Runner 常绿；memory/multica/worker 由 API 推断
   const dots = [['ok','Runner'], [S.timeline.some(p=>p.configured)?'ok':'off','Timeline'],
@@ -117,7 +121,8 @@ function specText(t) {
 function recipientsText(t) {
   const list = t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || t.config.chatId }] : []);
   if (t.type === 'agent_task' && t.notify?.publish?.enabled) return (t.notify.publish.recipients || []).map((r) => r.name || r.id).join('、') || '未设置';
-  return list.map((r) => r.name || r.id).join('、') || '';
+  const shown = list.map((r) => r.name).filter(Boolean).join('、');
+  return shown || (list.length ? '待补全' : '');
 }
 function filteredTasks() {
   let list = S.tasks;
@@ -167,7 +172,7 @@ function pageTasks() {
       <div class="row" style="gap:6px">
         <button class="btn ghost sm" data-menu="fs">状态</button>
         <button class="btn ghost sm" data-menu="ft">类型</button>
-        ${chips.length ? `<button class="btn ghost sm" data-clear="1">清除筛选</button>` : ''}
+        ${chips.length ? chips.join('') + `<button class="btn ghost sm" data-clear="1">清除筛选</button>` : ''}
       </div>
       <span class="spacer"></span>
       ${S.sub.startsWith('tag:') && !S.sub.startsWith('tag:new') ? `<button class="btn ghost sm" id="btnShare">分享整包</button>` : ''}
@@ -199,7 +204,7 @@ function weekHTML(list) {
   const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   for (let i = 0; i < 7; i += 1) {
     const d = new Date(start.getTime() + i * 864e5);
-    const items = list.filter((t) => t.status === 'active' && t.next_run_at && new Date(t.next_run_at * 1000).toDateString() === d.toDateString());
+    const items = list.filter((t) => ['active','paused'].includes(t.status) && t.next_run_at && new Date(t.next_run_at * 1000).toDateString() === d.toDateString());
     const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
     const dayHtml = '<div class="day' + (i === 0 ? ' today' : '') + '"><div class="dh"><b>' + (d.getMonth() + 1) + '/' + d.getDate() + '</b><span>周' + wd + '</span></div>';
     const itemsHtml = items.map((t) => {
@@ -333,7 +338,7 @@ function createModalHTML() {
 }
 function renderCfPane() {
   const pane = $('#cfPane'); if (!pane) return;
-  if (CF.step === 1) { pane.innerHTML = cfStep1(); $$('#cfPane [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); }); }
+  if (CF.step === 1) { pane.innerHTML = cfStep1(); $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); }); }
   if (CF.step === 2) pane.innerHTML = cfStep2();
   if (CF.step === 3) pane.innerHTML = cfStep3();
   if (CF.step === 4) pane.innerHTML = cfStep4();
@@ -353,11 +358,23 @@ async function tryOneLine(text) {
   const at = t.match(/(每周[一二三四五六日天]|每天|工作日|每月\d{1,2}日?)\s*(\d{1,2})[:：点](\d{2})?/);
   const tag = t.match(/#([^\s#]+)/);
   const to = t.match(/给\s*([^\s#]+)\s/);
-  const spec = at ? { kind: /每天/.test(at[1]) ? 'rate' : 'cron' } : { kind: 'one_shot', dateTime: Math.floor(Date.now()/1000)+3600 };
-  if (at && /每天/.test(at[1])) { const m = +at[3]||0; spec.intervalMinutes = (+at[2])*60+m || 1440; }
-  if (at && /每周/.test(at[1])) { const w = '一二三四五六日天'.indexOf(at[1].slice(2)) % 7; spec.expr = `${at[3]||'00'} ${at[2]} * * ${w}`; }
+  // BUG-04: 每天 H:M 是每天固定时刻 → cron，不是 540 分钟间隔
+  let spec = null;
+  if (at) {
+    const hh = +at[2] || 9, mm = +at[3] || 0, expr = mm + ' ' + hh + ' * * ';
+    if (/每天/.test(at[1])) spec = { kind: 'cron', expr: expr + '*', timezone: 'Asia/Shanghai' };
+    else if (/工作日/.test(at[1])) spec = { kind: 'cron', expr: expr + '1-5', timezone: 'Asia/Shanghai' };
+    else if (/每周/.test(at[1])) { const w = ('一二三四五六日天'.indexOf(at[1].slice(2)) + 2) % 7; spec = { kind: 'cron', expr: expr + w, timezone: 'Asia/Shanghai' }; }
+    else if (/每月/.test(at[1])) { const d = (at[1].match(/\d{1,2}/) || [0, 1])[0]; spec = { kind: 'cron', expr: expr + d, timezone: 'Asia/Shanghai' }; }
+  }
+  if (!spec) spec = { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 3600, timezone: 'Asia/Shanghai' };
   CF.oneLine = t; CF.type = type; CF.spec = spec; CF.title = t.length > 40 ? t.slice(0, 40) : t;
-  if (tag) { const tg = S.tags.find((g)=>g.name===tag[1]) || { id:'tag_'+tag[1], name:tag[1], color:'#cdf26b', fresh:true }; if (tg.fresh){ S.tags.push(tg); } CF.tags = [tg.id]; }
+  // BUG-05: #名称 优先按收件人解析（X1 不伪造）；解析不出时标待确认，绝不本地造 Tag
+  if (tag) {
+    const r = await resolveDirectory(tag[1]);
+    if (r.length) { CF.recipients = [r[0]]; }
+    else { CF.recipients = [{ raw: tag[1], unresolved: true }]; CF.pending = true; }
+  }
   if (to) { const r = await resolveDirectory(to[1]); CF.recipients = r.length ? [r[0]] : [{ raw: to[1], unresolved: true }]; }
   CF.step = 5; renderModal();
 }
@@ -382,7 +399,7 @@ function cfStep2() {
     agent_task: `<div class="field"><label>执行指令（只描述要做什么）</label><textarea class="input" id="cfContent" placeholder="通知谁、输出格式在下一步设置">${esc(CF.content)}</textarea></div>
       <div class="field"><label>模式</label><div class="choice-row"><button class="choice" data-mode="read">只读</button><button class="choice" data-mode="write">可写</button></div></div>`,
   }[CF.type] || '';
-  return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}`;
+  return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
 }
 function chip(rec, i) {
   return `<span class="chip">${esc(rec.name||rec.raw)}${rec.unresolved?' <span class="muted">(未解析)</span>':''} <span data-rmrec="${i}" role="button" aria-label="移除">×</span></span>`;
@@ -407,7 +424,7 @@ function cfStep3() {
   return `<div class="field"><label>执行器</label><div class="choice-col" id="execList">
     <button class="choice" data-exec="default">默认执行器<span class="muted">（${CF.executor==='memory'?'Memory Service':'已连接'}）</span></button>
     ${S.bots.configured ? '<button class="choice" data-exec="bot">值班 Bot（已校验）</button>' : `<div class="alert warn" style="margin-top:8px">还没有可用的 Bot。<button class="btn ghost sm" data-configbot>配置 Bot</button></div>`}</div></div>
-  <div class="field"><label>运行通知 → 通知我</label><div class="seg" id="notifySeg"><button class="seg-b" data-nm="every">每次完成</button><button class="seg-b" data-nm="failures">仅失败</button><button class="seg-b" data-nm="off">关闭</button></div>
+  <div class="field"><label>运行通知 → 通知我</label><div class="seg" id="notifySeg"><button class="seg-b ${(CF.notifyMode||'every')==='every'?'on':''}" data-nm="every">每次完成</button><button class="seg-b ${(CF.notifyMode||'every')==='failures'?'on':''}" data-nm="failures">仅失败</button><button class="seg-b ${(CF.notifyMode||'every')==='off'?'on':''}" data-nm="off">关闭</button></div>
     <div class="preview muted" id="notifyPrev"></div></div>
   <div class="field"><span class="label">发布任务产出 → 发送到联系人/群组</span>
     <label class="switch-row"><span class="switch"><input type="checkbox" id="pubOn" ${CF.publish.enabled?'checked':''}><span class="knob"></span></span>开启发布</label>
@@ -436,6 +453,7 @@ function cfStep4() {
   <div class="field" style="margin-top:12px"><span class="label">频率</span><div class="seg" id="freqSeg">${seg.map(([k,l])=>`<button class="seg-b" data-fq="${k}">${l}</button>`).join('')}</div></div>
   <div class="grid2">
     <div class="field" id="fOnce" style="display:none"><label>日期与时间</label><input class="input" type="datetime-local" id="fWhen"></div>
+    <div class="field" id="fTime" style="display:none"><label>时刻</label><input class="input" type="time" id="fTime" value="09:30"></div>
     <div class="field" id="fRate" style="display:none"><label>间隔（分钟）</label><input class="input" type="number" id="fRate" value="60"></div>
     <div class="field" id="fWeek" style="display:none"><label>每周几</label><select class="input" id="fDow">${'一二三四五六日'.split('').map((d,i)=>`<option value="${i+1}">周${d}</option>`).join('')}</select></div>
     <div class="field" id="fMonth" style="display:none"><label>每月几日</label><select class="input" id="fDom">${Array.from({length:28},(_,i)=>`<option value="${i+1}">${i+1} 日</option>`).join('')}</select></div>
@@ -465,9 +483,12 @@ function cfStep5() {
       <div class="muted" style="margin-top:6px">write 模式任务不支持真实执行预览（H12）；发布预览仅展示形态，不发送任何消息。</div></div>` : ''}`;
 }
 function buildSpec() {
+  const tzEl = $('#fTz');
+  const tz = (CF.spec && CF.spec.timezone) || (tzEl ? tzEl.value : 'Asia/Shanghai');
+  // if the user already fixed a full spec in the time step, keep it verbatim
+  if (CF.spec && CF.spec.kind) return { ...CF.spec, timezone: tz };
   // a draft saved before visiting the time step gets a safe default spec
-  const base = CF.spec && CF.spec.kind ? CF.spec : { kind: 'rate', intervalMinutes: 1440 };
-  return { ...base, timezone: (CF.spec && CF.spec.timezone) || 'Asia/Shanghai' };
+  return { kind: 'rate', intervalMinutes: 1440, timezone: tz };
 }
 
 /* ========================================================= 补全页 / 连接页 / 分享 */
@@ -494,7 +515,7 @@ function pageConnections() {
     card('Multica', !!getConnCache('multica'), connForm('multica')) +
     card('Timeline 数据源', S.timeline.some((p) => p.configured && !p.stale), `<div class="muted">${S.timeline.filter((p)=>p.configured).length}/${S.timeline.length} 个项目有数据</div>`,
       `<div class="row" style="gap:6px;margin-top:8px"><button class="btn ghost sm" id="tlRefresh">全部刷新</button><span class="muted" id="tlNote"></span></div>`) +
-    card('账号与登录令牌', true, `<div class="muted">${esc(S.user.email)}</div>`, tokenMgmtHtml());
+    card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc(S.user.email)}</div>`, tokenMgmtHtml());
 }
 function getConnCache(k) { return (S.connStatus || {})[k] !== undefined ? S.connStatus[k] : null; }
 async function loadConnStatus() {
@@ -517,7 +538,7 @@ function pageShares() {
     h += '<div class="row" style="margin-top:6px">';
     h += s.revoked
       ? '<button class="btn ghost sm" data-reshare="' + s.tagId + '">重新分享</button>'
-      : '<button class="btn ghost sm" data-reshare="' + s.tagId + '">以接收方视角打开</button> <button class="btn danger ghost sm" data-revoke="' + s.token + '">撤销分享</button>';
+      : '<button class="btn ghost sm" data-openshare="' + s.token + '">以接收方视角打开</button> <button class="btn ghost sm" data-reshare="' + s.tagId + '">重新分享</button> <button class="btn danger ghost sm" data-revoke="' + s.token + '">撤销分享</button>';
     h += '</div></div>';
     return h;
   }
@@ -584,9 +605,18 @@ function shareModalHTML() {
     <div class="mfoot"><span class="spacer"></span><button class="btn ghost" data-act="closeSf">取消</button><button class="btn primary" id="sfOk" disabled>开启分享</button></div></div>`;
 }
 async function openShareModal(tagId) {
+  // BUG-12: real preview source (server endpoint), never '生成中…' forever
   const r = await api(`/tags/${tagId}/tasks`);
-  SF = { tagId, tasks: r.body || [] };
+  const list = (r.body && r.body.tasks) || [];
+  SF = { tagId, tasks: list };
   renderModal();
+  const okBtn = $('#sfOk');
+  if (okBtn) okBtn.disabled = list.length === 0;
+  const prev = $('#sfPreview');
+  if (prev) {
+    prev.innerHTML = list.map((t) => '<div class="row" style="justify-content:space-between;padding:4px 0"><span>' + typeIc(t.type) + esc(t.title) + '</span><span class="muted">' + esc(specText({ scheduleSpec: t.scheduleSpec })) + '</span></div>').join('')
+      + (list.length ? '' : '<div class="muted">这个 Tag 下还没有任务。</div>');
+  }
 }
 
 /* ========================================================= 事件绑定 */
@@ -597,10 +627,37 @@ function wire() {
   $$('#view [data-open], #view .task-row').forEach((el) => el.onclick = () => openDrawer(el.dataset.open));
   $$('#view [data-open], #view .task-row').forEach((el) => el.onkeydown = (e) => { if (e.key === 'Enter') openDrawer(el.dataset.open); });
   $$('#view [data-filter]').forEach((a) => a.onclick = () => { S.filterStatus = [a.dataset.filter]; S.sub = 'all'; render(); });
+  // BUG-07: status/type filter menus
+  const fsBtn = $('[data-menu="fs"]'); if (fsBtn) fsBtn.onclick = (e) => { e.stopPropagation(); openMenu(fsBtn, ['active','paused','draft','inactive','needs_attention','completed'].map((st) => '<button class="m-item" data-fs="' + st + '">' + (STATUS_L[st] || st) + '</button>').join(''), (act, arg) => { if (act === 'fs') { const set = new Set(S.filterStatus); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterStatus = [...set]; render(); } }); };
+  const ftBtn = $('[data-menu="ft"]'); if (ftBtn) ftBtn.onclick = (e) => { e.stopPropagation(); openMenu(ftBtn, TYPE_ORDER.map((ty) => '<button class="m-item" data-ft="' + ty + '">' + TYPE_LABEL[ty].split(' ')[0] + '</button>').join(''), (act, arg) => { if (act === 'ft') { const set = new Set(S.filterType); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterType = [...set]; render(); } }); };
+  // BUG-08: removable filter chips
+  $$('[data-rm-s]').forEach((c) => c.onclick = () => { S.filterStatus = S.filterStatus.filter((x) => x !== c.dataset.rmS); render(); });
+  $$('[data-rm-t]').forEach((c) => c.onclick = () => { S.filterType = S.filterType.filter((x) => x !== c.dataset.rmT); render(); });
   $$('#view [data-clear]').forEach((b) => b.onclick = () => { S.filterStatus = []; S.filterType = []; S.q = ''; $('#search').value = ''; render(); });
   $$('#view [data-new-type]').forEach((b) => b.onclick = () => newFlow(b.dataset.newType));
   $$('#view [data-new-tag]').forEach((b) => b.onclick = () => newFlow(null, { tags: [b.dataset.newTag] }));
-  $$('#tagSeg .seg-b').forEach((b) => b.onclick = () => nav('tasks/' + (b.dataset.seg === 'tag' ? 'all' : 'type:asme')));
+  const bs = $('#btnShare'); if (bs) bs.onclick = () => openShareModal(S.sub.slice(4));
+  $$('#tagSeg .seg-b').forEach((b) => b.onclick = () => {
+    // BUG-31: switching the view never jumps into a specific list
+    if (b.dataset.seg === 'tag') { S.sub = S.sub.startsWith('type:') ? 'all' : S.sub; }
+    else { S.sub = S.sub.startsWith('tag:') ? 'all' : S.sub; }
+    S.viewMode = 'list'; render();
+  });
+  // BUG-09: per-Tag ··· menu (share/rename/merge/delete)
+  $$('#tagList [data-tagmenu]').forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    const tagId = b.dataset.tagmenu;
+    const tag = S.tags.find((g) => g.id === tagId);
+    openMenu(b, '<button class="m-item" data-tm="share">分享整包</button><button class="m-item" data-tm="rename">重命名 / 改色</button><button class="m-item" data-tm="merge">合并到…</button><button class="m-item" data-tm="delete">删除 Tag</button>',
+      async (act) => {
+        if (!tag) return;
+        if (act === 'share') return openShareModal(tagId);
+        if (act === 'rename') return tagDlg(tag, false);
+        if (act === 'merge') return mergeTagDlg(tag);
+        if (act === 'delete') return confirmDlg({ title: '删除 Tag', body: '删除 Tag 不删除任务。确定删除「' + esc(tag.name) + '」吗？', ok: '删除', danger: true,
+          onOk: async () => { await api('/tags/' + tagId, { method: 'DELETE' }); await refresh(); render(); toast('已删除 Tag「' + tag.name + '」', { undo: async () => { location.hash = '#/tasks/all'; location.reload(); } }); return true; } });
+      });
+  });
   $$('#listSeg .seg-b').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
   $$('#sidebar [data-menu="id-menu"]').forEach((b) => b.onclick = () => openMenu(b, `
     <button class="m-item" data-idact="bind-email">绑定邮箱</button>
@@ -631,10 +688,27 @@ function wireDrawer() {
   });
 }
 async function drawerAction(id, op) {
-  if (op === 'pause') { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); toast('已暂停', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'active' } }); location.reload(); } }); location.reload(); return; }
-  if (op === 'enable') { const r = await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'active' } }); if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).join('、'), { kind: 'err', stay: 8000 }); else { toast('已启用'); location.reload(); } return; }
+  if (op === 'pause') {
+    // BUG-17: pause with undo, no full reload
+    await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } });
+    await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id);
+    toast('已暂停', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'active' } }); await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); } });
+    return;
+  }
+  if (op === 'enable') { const r = await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'active' } });
+    if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).join('、'), { kind: 'err', stay: 8000 });
+    else { await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); toast('已启用', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); await refresh(); render(); } }); }
+    return; }
   if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId }] : []), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) }); return; }
-  if (op === 'copy') { const t = DETAIL.task; newFlow(t.type, { title: t.title + '（副本）', content: t.content, spec: taskSpec(t) }); CF.step = 5; renderModal(); return; }
+  if (op === 'copy') {
+    const t = DETAIL.task; const sp = taskSpec(t);
+    newFlow(t.type, { title: t.title + '（副本）', content: t.content, spec: sp,
+      recipients: t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || t.config.chatId }] : []),
+      identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory',
+      publish: t.notify?.publish || { enabled: false, recipients: [], source: 'template', template: [] },
+      tags: (t.tags || []).map((g) => g.id) });
+    CF.step = 5; renderModal(); return;
+  }
   if (op === 'delete') return confirmDlg({ title: '删除计划任务', body: '删除后进入归档，可从归档恢复。确定删除这条任务吗？', ok: '删除', danger: true,
     onOk: async () => { await api(`/tasks/${id}`, { method: 'DELETE' }); toast('已删除', { undo: () => location.reload() }); setTimeout(() => location.reload(), 400); return true; } });
 }
@@ -644,6 +718,26 @@ async function toggleTag(taskId, tagId, add) {
   if (add) cur.add(tagId); else cur.delete(tagId);
   await api(`/tasks/${taskId}`, { method: 'PATCH', body: { tagIds: [...cur] } });
   await refresh(); openDrawer(taskId);
+}
+function mergeTagDlg(from) {
+  DLG = { html: () => '<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>合并 Tag</h3></div>'
+    + '<div class="mcontent">把「' + esc(from.name) + '」的任务并入：<select class="input" id="mergeInto">'
+    + S.tags.filter((t) => t.id !== from.id).map((t) => '<option value="' + t.id + '">#' + esc(t.name) + '</option>').join('')
+    + '</select></div>'
+    + '<div class="mfoot"><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn primary" data-act="dlgOk">合并</button></div></div></div>',
+    onOk: async () => {
+      const into = $('#mergeInto') ? $('#mergeInto').value : null;
+      if (!into) return false;
+      const affected = S.tasks.filter((t) => (t.tags || []).some((g) => g.id === from.id));
+      for (const t of affected) {
+        const ids = new Set((t.tags || []).map((g) => g.id)); ids.add(into);
+        await api('/tasks/' + t.id, { method: 'PATCH', body: { tagIds: [...ids] } });
+      }
+      await api('/tags/' + from.id, { method: 'DELETE' });
+      await refresh(); render(); toast('已合并并删除旧 Tag', { undo: () => location.reload() });
+      return true;
+    } };
+  renderModal();
 }
 function newTagDlg(forTask) {
   const color = TAG_COLORS[S.tags.length % TAG_COLORS.length];
@@ -659,13 +753,15 @@ function newTagDlg(forTask) {
 }
 function wireCf() {
   const one = $('#cfOne'); if (one) { one.onkeydown = (e) => e.key === 'Enter' && tryOneLine(one.value); $$('#cfPane [data-demo]').forEach((c) => c.onclick = () => tryOneLine(c.dataset.demo)); }
-  $$('#cfPane [data-step]').forEach((b) => b.onclick = () => { CF.step = +b.dataset.step; renderModal(); });
+
   // NOTE: step/footer bindings live in renderCfPane (called below) so they
   // are never attached twice to the same DOM node.
   wireCfPane();
 }
 
 function wireCfPane() {
+  // BUG-21: step-rail buttons sit outside #cfPane — bind at modalLayer scope
+  $$('#modalLayer .steps [data-step]').forEach((b) => b.onclick = () => { CF.step = +b.dataset.step; renderModal(); });
   const title = $('#cfTitle'); if (title) title.oninput = (e) => CF.title = e.target.value;
   const content = $('#cfContent'); if (content) content.oninput = (e) => CF.content = e.target.value;
   $$('#cfPane [data-mode]').forEach((b) => b.onclick = () => { CF.mode = b.dataset.mode; renderModal(); });
@@ -674,6 +770,9 @@ function wireCfPane() {
   wireChips('recInput', 'recBox', 'recPicker', 'recipients');
   wireChips('pubRecInput', 'pubRecBox', 'recPicker2', 'publish.recipients');
   $$('#cfPane [data-ident]').forEach((b) => b.onclick = () => { CF.identity = b.dataset.ident.split(':')[0] === 'bot' ? 'bot' : 'user'; renderModal(); });
+  $$('#cfPane [data-exec]').forEach((b) => b.onclick = () => { CF.executor = b.dataset.exec; renderCfPane(); });
+  $$('#cfPane [data-nm]').forEach((b) => b.onclick = () => { CF.notifyMode = b.dataset.nm; renderCfPane(); });
+  $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
   $$('#cfPane [data-configbot]').forEach((b) => b.onclick = () => openConnDlg('rc_bot', 3));
   const pubOn = $('#pubOn'); if (pubOn) pubOn.onchange = (e) => { CF.publish.enabled = e.target.checked; renderModal(); };
   $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
@@ -718,7 +817,9 @@ function wireTimeStep() {
   const sync = () => { const k = CF.freq || (CF.spec?.kind === 'cron' ? 'weekly' : CF.spec?.kind === 'one_shot' ? 'once' : CF.spec?.kind === 'timeline' ? 'timeline' : 'daily');
     $$('#freqSeg .seg-b').forEach((b) => b.classList.toggle('on', b.dataset.fq === k));
     for (const id of ['fOnce','fRate','fWeek','fMonth','fTL','fTL2','fTL3','fTL4']) { const el = $('#' + id); if (el) el.style.display = 'none'; }
-    const map = { once: ['fOnce'], daily: ['fRate'], weekdays: ['fRate','fWeek'], weekly: ['fRate','fWeek'], monthly: ['fRate','fMonth'], timeline: ['fTL','fTL2','fTL3','fTL4'] };
+    // BUG-03: daily/weekly/monthly use a time-of-day input (+ selector);
+    // plain intervals only appear via the 高级 area (not the common presets)
+    const map = { once: ['fOnce'], daily: ['fTime'], weekdays: ['fTime','fDow'], weekly: ['fTime','fDow'], monthly: ['fTime','fDom'], timeline: ['fTL','fTL2','fTL3','fTL4'], rate: ['fRate'] };
     (map[k] || []).forEach((id) => $('#' + id).style.display = '');
     if (k === 'timeline') fillMilestones();
   };
@@ -739,28 +840,78 @@ async function fillMilestones() {
   m.value = CF.spec?.milestone || '';
   p.onchange = () => fillMilestones();
 }
+function specFromFreq() {
+  // BUG-03: translate the visible frequency choice into the real spec
+  const f = CF.freq || (CF.spec && CF.spec.kind === 'timeline' ? 'timeline' : CF.spec && CF.spec.kind === 'one_shot' ? 'once' : 'daily');
+  const at = () => { const el = $('#fTime'); return el && el.value ? el.value : '09:00'; };
+  const dom = () => { const el = $('#fDom'); return el && el.value ? Number(el.value) : 1; };
+  const dow = () => { const el = $('#fDow'); return el && el.value ? Number(el.value) : 1; };
+  if (f === 'once') { const el = $('#fWhen'); return { kind: 'one_shot', dateTime: el && el.value ? Math.floor(new Date(el.value).getTime() / 1000) : Math.floor(Date.now() / 1000) + 86400, timezone: tz() }; }
+  if (f === 'rate') { const el = $('#fRate'); return { kind: 'rate', intervalMinutes: el && el.value ? Number(el.value) : 60, timezone: tz() }; }
+  if (f === 'daily') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * *', timezone: tz() };
+  if (f === 'weekdays') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * 1-5', timezone: tz() };
+  if (f === 'weekly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' * * ' + dow(), timezone: tz() };
+  if (f === 'monthly') return { kind: 'cron', expr: at().split(':').reverse().join(' ') + ' ' + dom() + ' * *', timezone: tz() };
+  return CF.spec || { kind: 'rate', intervalMinutes: 1440, timezone: tz() };
+}
 function previewNext() {
   const el = $('#cfNextPrev'); if (!el) return;
-  const s = buildSpec();
-  el.innerHTML = `下一次运行：${fmtNext(s.dateTime || (S.tasks[0]?.next_run_at))}（${tzLabel(s.timezone || 'Asia/Shanghai')}）`;
+  const s = $('#freqSeg') ? specFromFreq() : buildSpec();
+  el.innerHTML = '下一次运行：' + fmtNext(s.dateTime || nextAtForCron(s)) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
+}
+function nextAtForCron(s) {
+  // next firing of a cron spec (M H ...): scan the next 8 days
+  const p = (s.expr || '0 9 * * *').split(/\s+/);
+  const mi = Number(p[0]) || 0, h = Number(p[1]) || 0, dom = p.length > 3 && p[3] !== '*' ? Number(p[3]) : null;
+  const dows = p[4] && p[4] !== '*' ? p[4].split(',').map(Number) : null;
+  for (let i = 0; i < 8; i += 1) {
+    const d = new Date(Date.now() + i * 864e5);
+    if (dom && d.getDate() !== dom) continue;
+    if (dows && !dows.includes(d.getDay())) continue;
+    const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, 0).getTime();
+    if (t > Date.now()) return Math.floor(t / 1000);
+  }
+  return null;
 }
 async function nextCf() {
-  // 校验：开启发布但没有对象时不能继续
+  // BUG-22: empty required content blocks continue with a field error + shake
+  if (CF.step === 2) {
+    const c = $('#cfContent');
+    const needContent = ['asme', 'bot', 'agent_task', 'outreach'].includes(CF.type);
+    if (needContent && !(CF.content || '').trim()) {
+      if (c) { c.classList.add('invalid'); const m = $('#cfErr'); if (m) m.textContent = '内容不能为空'; setTimeout(() => c.classList.remove('invalid'), 800); }
+      const modal = document.querySelector('.modal.create'); if (modal) { modal.classList.remove('shake'); void modal.offsetWidth; modal.classList.add('shake'); }
+      return;
+    }
+  }
   if (CF.type === 'agent_task' && CF.publish.enabled && !(CF.publish.recipients || []).length) { toast('开启发布时需要先选择对象', { kind: 'warn' }); CF.step = 3; renderModal(); return; }
   CF.step += 1; if (CF.step === 4) { CF.freq = CF.freq || 'daily'; } renderModal();
 }
 async function saveTask(finalStatus) {
-  const spec = buildSpec();
+  const spec = $('#freqSeg') ? specFromFreq() : buildSpec();
   const config = { ...(CF.config || {}) };
-  if (['asme','bot'].includes(CF.type)) config.chatId = (CF.recipients[0] || {}).id || (CF.recipients[0] || {}).raw;
+  if (['asme','bot','ai_report'].includes(CF.type)) {
+    const r = CF.recipients[0] || {};
+    config.chatId = r.id || r.raw;
+    config.chatName = r.name || null; // BUG-33: keep the resolved display name
+  }
   if (CF.type === 'ai_report') config.chatId = (CF.recipients[0] || {}).id || (CF.recipients[0] || {}).raw;
   if (CF.type === 'agent_task') { config.executor = CF.executor === 'bot' ? 'memory' : CF.executor; config.mode = CF.mode; config.sender = CF.identity; }
   if (CF.type === 'outreach') config.template = { question: $('#cfContent')?.value || CF.content, goal: $('#cfGoal')?.value || '', maxFollowup: +($('#cfMax')?.value || 2), followupIntervalSeconds: +($('#cfGap')?.value || 7200), recipients: CF.recipients.map((r) => ({ targetType: 'user', targetRef: r.id })) };
-  const notify = { ...(CF.notifyMe ? {} : { notifyMe: { mode: 'every' } }), publish: { enabled: CF.publish.enabled && (CF.publish.recipients || []).length > 0, recipients: CF.publish.recipients || [], identity: CF.identity === 'bot' ? 'bot' : 'user', source: CF.publish.source || 'template', template: CF.publish.template || [] } };
+  const notify = { notifyMe: { mode: CF.notifyMode || 'every' }, publish: { enabled: CF.publish.enabled && (CF.publish.recipients || []).length > 0, recipients: CF.publish.recipients || [], identity: CF.identity === 'bot' ? 'bot' : 'user', source: CF.publish.source || 'template', template: CF.publish.template || [] } };
   const body = { type: CF.type, title: CF.title || CF.oneLine.slice(0, 40) || '未命名任务', content: CF.content || CF.oneLine, scheduleSpec: spec, config, notify, tagIds: CF.tags, status: finalStatus };
-  const r = await api('/tasks', { method: 'POST', body: JSON.stringify({ ...body, idempotencyKey: CF.editing ? undefined : 'cf-' + uuid() }) });
+  // BUG-01/02: editing PATCHes the original; a fresh flow reuses the draft
+  // id created by the trial run instead of POSTing a second task
+  let r;
+  if (CF.editing) {
+    r = await api(`/tasks/${CF.editing}`, { method: 'PATCH', body });
+  } else if (CF.lastDraftId) {
+    r = await api(`/tasks/${CF.lastDraftId}`, { method: 'PATCH', body });
+  } else {
+    r = await api('/tasks', { method: 'POST', body: { ...body, idempotencyKey: 'cf-' + uuid() } });
+  }
   if (r.status === 200) { CF.lastDraftId = r.body.task.id; return r.body.task.id; }
-  toast('保存失败：' + (r.body.error || r.status), { kind: 'err' });
+  toast('保存失败：' + ((r.body && r.body.error) || r.status), { kind: 'err' });
 }
 async function doTrial() {
   const id = CF.editing || CF.lastDraftId;
@@ -777,11 +928,27 @@ function closeCf(autoDraft) {
   CF = null; renderModal();
 }
 function wireSharePage() {
-  $$('#view [data-copy]').forEach((b) => b.onclick = async () => { await navigator.clipboard.writeText(location.origin + '/share/' + b.dataset.copy); toast('已复制分享链接'); });
+  $$('#view [data-copy]').forEach((b) => b.onclick = async () => {
+    const link = location.origin + '/share/' + b.dataset.copy;
+    let copied = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(link); copied = true; } } catch { copied = false; }
+    if (!copied) { // BUG-15: insecure-context fallback
+      const ta = document.createElement('textarea'); ta.value = link; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, link.length);
+      try { copied = document.execCommand('copy'); } catch { copied = false; }
+      ta.remove();
+    }
+    toast(copied ? '已复制分享链接' : '复制失败——链接：' + link, copied ? 'ok' : 'warn');
+  });
   $$('#view [data-revoke]').forEach((b) => b.onclick = () => confirmDlg({ title: '撤销分享', body: '撤销后链接立即失效；接收方已导入的副本不受影响。确定撤销？', ok: '撤销', danger: true,
     onOk: async () => { await api(`/shares/${b.dataset.revoke}/revoke`, { method: 'POST' }); location.reload(); } }));
-  $$('#view [data-reshare]').forEach((b) => b.onclick = () => nav('shares') || openShareModal(b.dataset.reshare));
-  const ns = $('#btnNewShare'); if (ns) ns.onclick = () => toast('请先在分组里选择一个 Tag', { kind: 'info' });
+  $$('#view [data-openshare]').forEach((b) => b.onclick = () => { window.open('/share/' + b.dataset.openshare, '_blank'); });
+  $$('#view [data-reshare]').forEach((b) => b.onclick = () => openShareModal(b.dataset.reshare));
+  const ns = $('#btnNewShare'); if (ns) ns.onclick = (e) => {
+    e.stopPropagation();
+    openMenu(ns, S.tags.map((g) => '<button class="m-item" data-sharepick="' + g.id + '">#' + esc(g.name) + '（' + countBy((t) => t.tags?.some(x => x.id === g.id)) + '）</button>').join('') || '<div class="m-item muted">还没有 Tag</div>',
+      (act, arg) => { if (act === 'sharepick') openShareModal(arg); });
+  };
   const sfOk = $('#sfOk'); if (sfOk) sfOk.onclick = async () => { const r = await api(`/tags/${SF.tagId}/share`, { method: 'POST', body: '{}' }); if (r.status === 200) { location.hash = '/share/' + r.body.share.token; } };
   $$('#modalLayer [data-act="closeSf"]').forEach((b) => b.onclick = () => { SF = null; renderModal(); });
 }
@@ -815,22 +982,49 @@ function openConnDlg(key, returnTo) {
 }
 
 /* ========================================================= 键盘（G7） */
+function highlightRow(id) {
+  const row = $('#row-' + id);
+  if (row) { row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1300); }
+}
+function showHelp() {
+  if ($('#helpOverlay')) { $('#helpOverlay').remove(); return; }
+  const d = document.createElement('div'); d.id = 'helpOverlay';
+  d.innerHTML = '<div class="dlg-scrim" id="helpScrim"><div class="dlg" role="dialog"><h3>快捷键</h3>'
+    + '<div class="d-b" style="line-height:2">N 新建计划任务 · / 搜索 · J/K 上下移动 · Enter 打开详情<br>P 暂停或恢复 · E 编辑 · Esc 关闭面板 · ? 显示本表<br>创建流程：1–5 选择步骤 · ⌘/Ctrl+Enter 继续或保存</div>'
+    + '<div class="row"><button class="btn primary" id="helpClose">关闭</button></div></div></div>';
+  document.body.appendChild(d);
+  d.querySelector('#helpClose').onclick = () => d.remove();
+  d.querySelector('#helpScrim').onclick = (e) => { if (e.target.id === 'helpScrim') d.remove(); };
+}
 function onKey(e) {
-  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
+  const inField = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
   const k = e.key.toLowerCase();
+  // BUG-19: Esc still closes panels while typing (single-key shortcuts stay inert in fields)
+  if (e.key === 'Escape') {
+    if (DLG) { DLG = null; renderModal(); return; }
+    if (CF) { closeCf(true); return; }
+    if (DETAIL) { closeDrawer(); return; }
+    if (MENU) closeMenu();
+    const help = $('#helpOverlay'); if (help) help.remove();
+    const mt = $('#menuToggle'); if (mt && window.innerWidth <= 860) { document.body.classList.remove('side-open'); }
+    return;
+  }
+  // BUG-25: creation-flow keys (1-5, ⌘Enter) work even while typing
+  if (CF && /^[1-5]$/.test(e.key)) { CF.step = +e.key; renderModal(); return; }
+  if (CF && (e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); CF.step === 5 ? $('#modalLayer [data-finish]')?.click() : nextCf(); return; }
+  if (inField) return;
   if (k === 'n' && !CF && !DLG) { e.preventDefault(); newFlow(null); }
   if (k === '/' && !CF && !DLG) { e.preventDefault(); $('#search')?.focus(); }
-  if (k === 'escape') { if (DLG) { DLG = null; renderModal(); return; } if (CF) return closeCf(true); if (DETAIL) return closeDrawer(); if (MENU) closeMenu(); }
   if (S.view !== 'tasks' || CF || DLG) return;
-  const rows = $$('#view .task-row'); if (!rows.length) return;
+  if (k === '?' && !CF && !DLG) { showHelp(); return; }
+  const rows = $$('#view .trow'); if (!rows.length) return;
   const idx = rows.findIndex((r) => r === document.activeElement);
   if (k === 'j' || e.key === 'ArrowDown') { e.preventDefault(); (rows[idx + 1] || rows[0]).focus(); }
   if (k === 'k' || e.key === 'ArrowUp') { e.preventDefault(); (rows[idx - 1] || rows[rows.length - 1]).focus(); }
   if (e.key === 'Enter' && idx >= 0) openDrawer(rows[idx].dataset.open);
   const t = idx >= 0 ? S.tasks.find((x) => x.id === rows[idx].dataset.open) : null;
   if (t && (k === 'p' || k === 'e')) { e.preventDefault(); drawerAction(t.id, k === 'p' ? (t.status === 'active' ? 'pause' : 'enable') : 'edit'); }
-  if (CF && /^[1-5]$/.test(e.key)) { CF.step = +e.key; renderModal(); }
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && CF) { e.preventDefault(); CF.step === 5 ? $$('#modalLayer [data-finish]')[0].click() : nextCf(); }
+
 }
 
 
@@ -850,8 +1044,13 @@ function wireCfFooter(){
       return;
     }
     if (t.hasAttribute('data-finish')) {
-      await saveTask(CF.editing ? 'paused' : 'active'); closeCf(); await refresh(); render();
-      toast(CF.editing ? '已保存' : '已保存并排程'); return;
+      // BUG-20: capture editing state before closeCf() nulls CF
+      const editing = CF.editing;
+      const id = await saveTask(editing ? 'paused' : 'active');
+      closeCf(); await refresh(); render();
+      toast(editing ? '已保存修改' : '已保存并排程');
+      if (id) highlightRow(id);
+      return;
     }
   });
 }
