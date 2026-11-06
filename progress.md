@@ -52,3 +52,15 @@
 - 部署：rcadmin@10.32.56.212，launchd `com.personal-schedule.service`，0.0.0.0:3230，NPM proxy host 13（nginx -t 通过后 reload，DB/conf 均有备份，未动其他站点），http://schedule.xmnup.com/ 已可用（DNS 原本即指向该机）。E 的账号已建，bootstrap token 存服务器 `~/personal-schedule/BOOTSTRAP_TOKEN.txt`（chmod 600，不入仓库/文档）。
 - 契约：docs/schedule-service-api-contract.md v0.1（含待联调 V1–V7）。
 - 待办：memory trigger-occurrence（E-184）、Multica webhook 真实触发（H4/V3）、RC JWT 刷新（V4）、Timeline 实源校准（H6/V5）、publish_fields 结果契约（V6）、write dry-run（H12/V7）、UI 与 E-182 原型全面对齐。
+
+## 2026-11-06 · E-183 联调轮（Memory 部署 + V1/H6 验证 + runner 缺陷修复）
+
+- **Memory 健康诊断**：`/health` database.connected:false 根因 = 该端点按设计跳过鉴权（auth.ts 显式跳过 /health → 无 userContext → 无 per-user db 句柄），与数据库实际状态无关。数据完好：esone.qiu 19005 messages / 26100 entities / 36 outreach sessions；迁移已应用、sqlite-vec 加载正常。未重建、未改动数据。附带发现：两台 LLM 提供方均 bad_request 降级（cooldown 126 次连续失败）——环境/密钥问题，非本任务范围，已记录。
+- **Memory 部署**：经 canonical `tools/deploy-memory-service.mjs`（worktree af396b92，build→rsync→远程两阶段 build+rollout，含 rollback 镜像/健康检查/watchdog）部署 Sol 的 develop（trigger-occurrence + 结果 envelope 契约上线）；数据卷与 .env 未动。
+- **V1 真实联调（含缺陷修复）**：E2E 触发 outreach one-shot → Runner → memory trigger-occurrence → 会话创建（created:true，sessionId 证据）；重复触发幂等（created:false/duplicate_occurrence）。过程中发现并修复 runner 缺陷：execute() 从仅含 occurrences 列的 leased 行重解析 task_config，导致任务配置被清空（outreach template 到达 memory 为 null）→ 改用 JOIN 解析的 task，新增回归测试；修复后重部署复测通过（attempt 1 成功）。测试用户 glm-sched-itest（独立 pak key + schedule 账号），未触碰真实用户数据。
+- **H6 验证**：定位真实 Release Info 接口（heimdall get_release_info），实测 200/90ms；发现 normalizeReleases 与真实契约不符 → 按 currentRelease + releaseInfo(M/D/YYYY 里程碑映射) 重新 pin，未设日期/Comment 跳过；新增捕获真实响应的测试；服务器已配置 timeline.sourceUrl 并真实刷新（mThor 26.4.20 全里程碑入缓存，stale:false）。
+- **分享页扩展安装入口**：install→waiting→ready 三态安装引导卡（对齐原型），schema 版本过旧提示升级，勾选 sessionStorage 持久化、扩展出现自动继续；extInstallUrl 经 /extension/info 暴露（SCHEDULE_EXT_INSTALL_URL 部署配置，真实商店 URL 待定）。
+- **H12 实况**：memory 执行器契约无 dry-run 标志（源码核实）；read 模式天然无副作用可作试运行，write 模式暂不可试运行（trial 端点如实返回 pending_executor_capability）。
+- **V4/H4 状态**：E 的 schedule 账号尚无任何 RC/Multica 连接 → 无法做真实发送/webhook 触发验证（不冒充）。Bot 凭据 client_credentials 自动续期已实现；AsMe 需用户在 Settings 重新授权（或经 E-184 扩展桥接）。
+- deploy.sh：launchctl bootstrap 加重试（bootout 后偶发 error 5）。
+- 39/39 测试通过；提交 653aaa2；schedule 服务已重部署（health ok）。
