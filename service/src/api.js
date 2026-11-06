@@ -503,7 +503,12 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
       if (!memory) return { available: false, reason: 'memory connection not configured' };
       const base = String(memory.baseUrl).replace(/\/+$/, '');
       const templateId = task.config.memoryTemplateId || task.id;
-      const response = await fetch(`${base}/api/v1/outreach/sessions?templateId=${encodeURIComponent(templateId)}&limit=20`, {
+      // E-184 follow-up chain contract: includeHistory=1 for per-occurrence
+      // state/rounds/history; exact occurrenceKey passthrough when a run is
+      // selected (E-184 222dfe13)
+      const q = new URLSearchParams({ templateId, limit: '20', includeHistory: req.query.includeHistory === '1' ? '1' : '' });
+      if (req.query.occurrenceKey) q.set('occurrenceKey', String(req.query.occurrenceKey));
+      const response = await fetch(`${base}/api/v1/outreach/sessions?${q}`, {
         headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(config.httpTimeoutMs),
       });
@@ -532,7 +537,24 @@ export function registerRoutes(app, { db, auth, shares, runner, timeline, notify
     const { action, sessionId } = req.body;
     const memory = getConnections(user.id).memory;
     if (!memory) throw badRequest('memory connection not configured');
-    const base = String(memory.baseUrl).replace(/\/+$/, '');
+    // ownership check: the session must belong to THIS task's template before
+    // any action is forwarded (E-184 contract)
+    if (sessionId) {
+      const base0 = String(memory.baseUrl).replace(/\/+$/, '');
+      const tpl = task.config.memoryTemplateId || task.id;
+      let owned = false;
+      try {
+        const check = await fetch(`${base0}/api/v1/outreach/sessions?templateId=${encodeURIComponent(tpl)}&limit=50&includeHistory=1`, {
+          headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(config.httpTimeoutMs),
+        });
+        if (check.ok) {
+          const data = await check.json().catch(() => ({}));
+          owned = (data.records || data.sessions || []).some((x) => x.id === sessionId);
+        }
+      } catch { owned = false; }
+      if (!owned) throw badRequest('会话不属于该任务，已拒绝转发');
+    }
     const routes = {
       cancel_session: `/api/v1/outreach/sessions/${sessionId}/cancel`,
       continue_followup: `/api/v1/outreach/sessions/${sessionId}/continue-followup`,

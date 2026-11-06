@@ -257,6 +257,7 @@ function drawerHTML() {
     h += '<div class="row" style="gap:6px;margin-top:6px">' + evHTML(r);
     if (r.status === 'needs_attention') h += '<button class="btn sm" data-run="resend:' + r.id + '">重试（下游幂等）</button><button class="btn ghost sm" data-run="skip:' + r.id + '">跳过</button>';
     if (r.publish_status === 'publish_paused') h += '<button class="btn sm" data-run="pubretry:' + r.id + '">仅重试发布（不重跑任务）</button>';
+    h += '<button class="btn ghost sm" data-chain="' + r.occ_key + '">查看此轮追问链</button>';
     h += '</div></div>';
     return h;
   }
@@ -282,7 +283,7 @@ function drawerHTML() {
       <div class="content-box"><div class="cb-h">Tag</div><div class="row">${(t.tags||[]).map((g)=>`<span class="tag" data-rmtag="${g.id}" style="--tc:${g.color}">#${esc(g.name)} ×</span>`).join('')||'<span class="muted">未分组</span>'} <button class="btn ghost sm" data-addtag>＋ 添加 Tag</button></div></div>
       <div class="content-box"><div class="cb-h">来源</div><div class="kv"><span>创建方式</span><span>${{web:'Web 手动创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管'}[t.origin||'web']||t.origin}</span></div><div class="kv"><span>创建时间</span><span>${new Date(t.created_at*1000).toLocaleString()}</span></div></div>` : ''}
     ${DETAIL.tab === 'runs' ? runsHTML : ''}
-    ${DETAIL.tab === 'chain' ? '<div class="empty" style="padding:18px">追问链视图由 Memory Service 提供（待 E-184 联调数据源）</div>' : ''}
+    ${DETAIL.tab === 'chain' ? '<div id="chainBox">追问链加载中…</div>' : ''}
     <div class="dfoot">
       ${t.status==='active'?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
       ${['paused','draft','inactive','completed'].includes(t.status)?`<button class="btn primary" data-op="enable">${t.status==='draft'?'检查并排程':'启用'} <kbd>P</kbd></button>`:''}
@@ -569,6 +570,7 @@ function wireDrawer() {
     openMenu(b, S.tags.map((g) => `<button class="m-item" data-addtag2="${g.id}">#${esc(g.name)}</button>`).join('') + '<button class="m-item" data-newtag2>＋ 新建 Tag</button>',
       (act, arg) => { if (act === 'addtag2') toggleTag(DETAIL.task.id, arg, true); if (act === 'newtag2') newTagDlg(true); });
   });
+  $$('#drawerLayer [data-chain]').forEach((b) => b.onclick = () => { DETAIL.tab = 'chain'; DETAIL.chainKey = b.dataset.chain; renderDrawer(); loadChain(DETAIL.task.id, DETAIL.chainKey); });
   $$('#drawerLayer [data-run]').forEach((b) => b.onclick = async () => {
     const [op, id] = b.dataset.run.split(':');
     const r = await api(`/runs/${id}/${op === 'resend' ? 'resend' : op === 'skip' ? 'skip' : 'publish/retry'}`, { method: 'POST', body: '{}' });
