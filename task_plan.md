@@ -44,3 +44,15 @@
 21. [完成] §3.9.2 刷新后重算：推迟顺延、已执行不重发；§3.9.3 错过窗口：宽限内补发（标注延迟），超宽限 needs_attention + 立即发送/跳过本 release；§3.9.4 时区（任务时区解释触发时刻，刷新任务锚服务器时区）。
 22. [完成] 唯一键修订为 (userId, taskId, release, milestone)；源数据新鲜度与任务执行态分离。
 23. [完成] §3.9.5 验收用例 T1–T12；prototype-flows v0.6 错过窗口/延迟触发态；agent.md/H13/§6 修改清单同步；附件交付 E-181，回报 E-180。
+
+### E-183 联调轮（2026-11-06，进行中）
+
+1. [完成] Memory 健康诊断：/health connected:false = 无鉴权探针的设计语义（auth 中间件显式跳过 /health），DB 完好未动。
+2. [完成] 部署 Sol develop（af396b92）至 memory-service（canonical 部署脚本，回滚镜像+健康检查齐备）。
+3. [完成] V1 E2E：trigger-occurrence 真实触发 + 幂等验证；发现并修复 runner 配置清空缺陷（回归测试 39/39）。
+4. [完成] H6：真实 Release Info 接口验证 + 契约 pin + 服务器配置 + 实际刷新成功。
+5. [完成] 分享页扩展安装引导流（三态 + 版本检查 + 自动继续）。
+6. [部分] 原型视觉对齐：分享页完成；主管理界面（/app）与 E-182 原型的全面视觉对齐未完成——待下轮。
+7. [待] V4 RC 授权：需用户配置 RC 凭据（Settings 或扩展桥接）后验证真实发送。
+8. [待] H4 Multica 真实触发：需用户 PAT/binding。
+9. [待] H12 write dry-run：取决于执行器侧（E-184/Sol）是否提供 dry-run 契约。
