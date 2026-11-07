@@ -290,3 +290,11 @@
 - **探针 r11**（上海浏览器 + UTC 00:24 任务）：预览/确认/列表/抽屉/完成页全部显示 00:24（UTC 标签）；服务器排程 2026-11-08T00:24Z；步骤 4 无 undefined；线上项目状态无任何 URL。
 - 84/84 单测；r5 13/13、r6 9/9、r7 28/28、r10 10/10、r11 11/11、ui16 30/30、启动冒烟 0 错误。
 - **部署指纹**：`/app`=`8e74a1e4…`、`/app/app.js`=`ae46881d…`、`/share/index.html`=`0d84109a…`；服务端 timeline.js/api.js md5 与提交一致。
+
+## 2026-11-07 · 第 12 轮：RC 信任边界 + BUG-62 时区统一（87/87，已部署+线上核验）
+
+- **RC 信任边界**：`SCHEDULE_RC_TRUSTED_ORIGINS`（默认仅 platform.ringcentral.com）+ `SCHEDULE_RC_TEST_ORIGINS`（仅隔离测试配置，生产必须不设）。所有 RC 出站请求（令牌、whoami 验证、目录、Bot、实际派发）经 `isTrustedRcOrigin` 门禁——任意 serverUrl 拒绝；HTTP 助手 `redirect:'error'`（302 不得带 Authorization 逃逸）；whoami 校验**响应结构**（扩展记录含 id/extensionNumber——裸 200 不是授权证据）；PUT 拒绝存储不可信目标；**既有"已验证"但指向不可信目标的连接计为缺失**（任务保持 inactive）。测试替身仅通过测试 origin 白名单生效。
+- **BUG-62 时区统一**：下拉为稳定中文名 + **计算的** UTC 偏移（DST 感知，5/5 带偏移）；`tzLabel`/确认页时区行统一中文名；r12 探针在上海浏览器验证 UTC + LA 组合（LA：预览「每周五 09:30 洛杉矶 UTC-8」、保存 `30 9 * * 5`、服务器排程 Fri 09:30 LA 墙钟、编辑回显 tz/at/dow）。
+- **生产核验**：既有 34 条 rc 连接全部使用默认可信 origin（无中断）；`SCHEDULE_RC_TEST_ORIGINS` 生产未设置 ✓。
+- 87/87 单测（新增 origin 矩阵/不可信拒绝/裸 200 拒绝/重定向拒绝/pre-boundary 回退/PUT 拒存）；全部探针在边界下重过（13/9/28/10/11/11/30）+ r12 11/11 + 启动冒烟 0 错误。
+- **部署指纹**：`/app`=`83cdeda5…`、`/app/app.js`=`c1cc009f…`、`/share/index.html`=`0d84109a…`（不变）；providers/api/store/server md5 与提交一致。
