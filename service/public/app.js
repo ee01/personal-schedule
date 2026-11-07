@@ -132,13 +132,18 @@ function taskSpec(t) { return typeof t.scheduleSpec === 'object' && t.scheduleSp
 const MISSING_L = { chatId: '收件人', 'connection:rc_user': 'RingCentral 授权', 'connection:rc_bot': 'Bot 凭据', 'connection:memory': 'Memory Service 连接', 'connection:jira': 'JIRA 连接', 'connection:multica': 'Multica 连接', source: '数据源', 'source.jql': 'JQL', 'source.url': '数据源地址', template: '报告模板', 'deliver.chatId': '投递对象', 'template.question': '问题内容', 'template.recipients': '目标收件人', content: '执行指令', 'multica.webhookUrl': 'Multica Webhook', 'multica.bindingUuid': 'Multica 绑定' };
 const missingLabel = (m) => MISSING_L[m] || m;
 // BUG-54: stable zh-CN datetime formatting (the browser locale leaked en-US)
-const fmtDT = (sec) => sec ? new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+const fmtDT = (sec, tz) => {
+  // BUG-61: optional spec timezone — schedule times render in the task's zone
+  if (!sec) return '—';
+  try { return new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false, ...(tz ? { timeZone: tz } : {}) }); }
+  catch { return new Date(sec * 1000).toLocaleString('zh-CN', { hour12: false }); }
+};
 function safeParse(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
 function specText(t) {
   const s = taskSpec(t); if (!s || !s.kind) return '';
   // BUG-43: plain text here — this value passes through esc() in the drawer
   // and confirm page; the HTML variant leaked as raw markup
-  if (s.kind === 'one_shot') return `一次 · ${fmtNextText(s.dateTime)}`;
+  if (s.kind === 'one_shot') return `一次 · ${fmtNextText(s.dateTime, s.timezone)}`;
   if (s.kind === 'rate') return `每 ${s.intervalMinutes} 分钟`;
   if (s.kind === 'cron') {
     // BUG-04: normalize 5-field (mi hh dom mo dow) and 6-field (sec mi hh
@@ -184,7 +189,7 @@ function rowHTML(t) {
     ${typeIc(t.type)}
     <div class="grow"><b>${esc(t.title)}</b>${src ? ` <span class="muted">· ${src}</span>` : ''}<div class="t-meta">${esc(TYPE_LABEL[t.type]||t.type)}${rcp ? ' · 对象：' + esc(rcp) : ''}${(t.missing||[]).length ? ' · <span style="color:var(--warn)">待补全：' + t.missing.map((m)=>esc(missingLabel(m))).join('、') + '</span>' : ''}</div></div>
     <div class="tags">${(t.tags || []).map((g) => `<span class="tag" style="--tc:${g.color||'#cdf26b'}">#${esc(g.name)}</span>`).join('')}</div>
-    <div class="next">${fmtNext(t.next_run_at)}<div class="s">${t.timezone ? tzLabel(t.timezone) : ''}</div></div>
+    <div class="next">${fmtNext(t.next_run_at, t.timezone)}<div class="s">${t.timezone ? tzLabel(t.timezone) : ''}</div></div>
     <div class="lastrun">${ev}</div>
     <span class="pill ${t.status}">${STATUS_L[t.status]||t.status}</span>
   </div>`;
@@ -354,7 +359,7 @@ function drawerHTML() {
       <div class="content-box"><div class="cb-h">计划</div>
         <div class="kv"><span>规则</span><span>${esc(specText(t))}</span></div>
         ${t.next_run_at?`<div class="kv"><span>下一次运行</span><span class="mono countdown" data-at="${t.next_run_at}"></span></div>`:''}
-        ${['active','paused'].includes(t.status) && nextRunsOf(t, 3).length > 1 ? `<div class="kv"><span>后续运行</span><span class="mono" style="font-size:12px">${nextRunsOf(t, 3).slice(1).map((a) => fmtDT(a)).join('<br>')}</span></div>` : ''}
+        ${['active','paused'].includes(t.status) && nextRunsOf(t, 3).length > 1 ? `<div class="kv"><span>后续运行</span><span class="mono" style="font-size:12px">${nextRunsOf(t, 3).slice(1).map((a) => fmtDT(a, t.timezone)).join('<br>')}</span></div>` : ''}
         ${s.kind==='timeline'?`<div class="kv"><span>版本信息</span><span>${esc((S.timeline.find(p=>p.id===s.project)||{}).currentRelease||'—')} · 刷新时间 ${((S.timeline.find(p=>p.id===s.project)||{}).fetchedAt? new Date(((S.timeline.find(p=>p.id===p)||{}).fetchedAt||0)*1000).toLocaleString():'—')}</span></div>`:''}
         <div class="kv"><span>时间源</span><span class="muted">Schedule Service（单一调度器）</span></div></div>
       <div class="content-box"><div class="cb-h">内容与对象</div>
@@ -422,7 +427,7 @@ function doneModalHTML() {
     <div class="mbody" style="text-align:center;padding:28px 22px">
       <div class="e-ic" style="margin:0 auto 10px">${ic('check')}</div>
       <h3 style="margin:0 0 8px">已创建「${esc(d.title)}」</h3>
-      <div class="muted">状态：${esc(st)}${d.missing.length ? ' · 还缺：' + d.missing.map((m) => esc(missingLabel(m))).join('、') : ''}${d.next ? ' · 下一次运行 ' + fmtNext(d.next) : ''}</div>
+      <div class="muted">状态：${esc(st)}${d.missing.length ? ' · 还缺：' + d.missing.map((m) => esc(missingLabel(m))).join('、') : ''}${d.next ? ' · 下一次运行 ' + fmtNext(d.next, d.tz || undefined) : ''}</div>
       <div class="row" style="justify-content:center;margin-top:18px;gap:8px">
         <button class="btn primary" id="doneClose">完成</button>
         <button class="btn ghost" id="doneView">查看任务</button>
@@ -582,7 +587,7 @@ function timeFromSpec(s) {
   // cron: 5-field (mi hh dom mo dow) or 6-field (sec mi hh dom mo dow)
   const raw = String(s.expr || '').trim().split(/\s+/);
   const p = raw.length === 6 ? raw.slice(1) : raw;
-  t.at = String(+p[1] || 9).padStart(2, '0') + ':' + String(+p[0] || 0).padStart(2, '0');
+  t.at = String(Number.isFinite(+p[1]) ? +p[1] : 9).padStart(2, '0') + ':' + String(Number.isFinite(+p[0]) ? +p[0] : 0).padStart(2, '0');
   if (p[2] && p[2] !== '*') { t.freq = 'monthly'; t.dom = Number(p[2]) || 1; }
   else if (p[4] && p[4] !== '*') {
     if (String(p[4]).includes('-')) t.freq = 'weekdays';
@@ -592,8 +597,12 @@ function timeFromSpec(s) {
 }
 function specFromTime() {
   const t = CF.time || defaultTime();
-  const [hh, mm] = (t.at || '09:00').split(':');
-  const head = `${+mm || 0} ${+hh || 9}`;
+  const parts = (t.at || '09:00').split(':');
+  // 00:xx is a legitimate time — `+hh || 9` used to swallow hour 0 back to 9
+  const hhRaw = parts[0], mmRaw = parts[1];
+  const HH = mmRaw !== undefined && hhRaw !== '' && Number.isFinite(+hhRaw) ? +hhRaw : 9;
+  const MM = Number.isFinite(+mmRaw) ? +mmRaw : 0;
+  const head = `${MM} ${HH}`;
   if (t.freq === 'once') {
     const dt = t.when ? Math.floor(new Date(t.when).getTime() / 1000) : 0;
     if (!dt || Number.isNaN(dt)) return null; // caller blocks — never silently falls back
@@ -632,7 +641,7 @@ function cfStep4() {
     <div class="field" id="fTL2" style="display:none"><label>里程碑</label><select class="input" id="fMile"></select></div>
     <div class="field" id="fTL3" style="display:none"><label>偏移（天）</label><div class="row"><button class="btn ghost sm" data-off="-">−</button><input class="input mono" id="fOff" type="number" value="${+t.off || 0}" style="width:70px"><button class="btn ghost sm" data-off="+">＋</button></div></div>
     <div class="field" id="fTL4" style="display:none"><label>时刻</label><input class="input" type="time" id="fTimeTL" value="${esc(t.at)}"></div>
-    <div class="field"><label>时区</label><select class="input" id="fTz">${TIMEZONES.map((z)=>`<option value="${z.id}" ${t.tz===z.id?'selected':''}>${z.label}</option>`).join('')}</select></div>
+    <div class="field"><label>时区</label><select class="input" id="fTz">${TIMEZONES.map(([id, label])=>`<option value="${id}" ${t.tz===id?'selected':''}>${label}</option>`).join('')}</select></div>
   </div>
   <div class="content-box" style="margin-top:10px"><div class="cb-h">预览</div><div id="cfNextPrev" class="muted"></div></div>`;
 }
@@ -1149,7 +1158,7 @@ function updateVarPreview() {
   const d = new Date(at * 1000);
   const fmt = (o) => new Intl.DateTimeFormat('zh-CN', { timeZone: tz, hour12: false, ...o }).format(d);
   const vars = { date: fmt({ year: 'numeric', month: '2-digit', day: '2-digit' }), time: fmt({ hour: '2-digit', minute: '2-digit' }), datetime: fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), weekday: fmt({ weekday: 'long' }), title: CF.title || '' };
-  el.innerHTML = esc(String(CF.content || '（内容为空）').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] !== undefined ? vars[k] : m)) + ` <div style="margin-top:4px">· 按下一次运行 ${fmtDT(at)}（${tzLabel(tz)}）替换</div>`;
+  el.innerHTML = esc(String(CF.content || '（内容为空）').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] !== undefined ? vars[k] : m)) + ` <div style="margin-top:4px">· 按下一次运行 ${fmtDT(at, tz)}（${tzLabel(tz)}）替换</div>`;
 }
 function wireTimeStep() {
   const seg = $('#freqSeg'); if (!seg) return;
@@ -1190,7 +1199,9 @@ function previewNext() {
   // BUG-45: timeline specs preview by the milestone rule, not cron defaults
   const next = s.kind === 'timeline' ? nextAtForTimeline(s) : (s.dateTime || nextAtForCron(s));
   if (!next) { el.innerHTML = '下一次运行：等待里程碑日期（数据源还没有该里程碑的日期）'; return; }
-  el.innerHTML = '下一次运行：' + fmtNext(next) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
+  // BUG-61: wall time rendered in the SPEC's timezone so the value and the
+  // tz label always agree (was browser time + task label → 08:24（UTC UTC+0）)
+  el.innerHTML = '下一次运行：' + fmtNext(next, s.timezone) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
 }
 function wallInTz(tz, epochMs) {
   // wall-clock fields of an instant, read in the spec's timezone
@@ -1511,7 +1522,10 @@ function wireCfFooter(){
         return;
       }
       // BUG-20: a real completion page after 保存并排程
-      CF = { done: { id, title: saved.title || CF.title || '未命名任务', status: saved.status, next: saved.next_run_at, missing: saved.missing || [] } };
+      // BUG-61: capture the spec timezone so the completion page's next-run
+      // renders in the task's zone, not the browser's
+      const doneTz = (CF.time && CF.time.tz) || saved.timezone || null;
+      CF = { done: { id, title: saved.title || CF.title || '未命名任务', status: saved.status, next: saved.next_run_at, tz: doneTz, missing: saved.missing || [] } };
       renderModal(); render();
       return;
     }

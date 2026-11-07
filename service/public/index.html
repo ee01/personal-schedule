@@ -753,7 +753,20 @@ const S = { user:null, view:'tasks', sub:'all', viewMode:'list', tasks:[], tags:
 let DLG=null, MENU=null, TOASTS=[];
 
 /* ---------- time formatting (prototype semantics) ---------- */
-function fmtNextText(sec){ if(!sec) return '—'; const d=new Date(sec*1000); const y=(n)=>n<10?'0'+n:n; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())} · ${rel}` }
+// wall time of an instant in a SPECIFIED timezone (falls back to the
+// browser's local time when tz is missing/invalid). BUG-61: rendering in
+// browser time while labelling with the task's zone showed 08:24 (UTC UTC+0)
+// for a UTC 00:24 schedule.
+function fmtWall(sec, tz){
+  if (tz) { try {
+    const p = {};
+    for (const x of new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(sec * 1000))) p[x.type] = x.value;
+    return `${+p.month}/${+p.day} ${String(+p.hour).padStart(2,'0')}:${p.minute}`;
+  } catch { /* fall through to browser time */ } }
+  const d = new Date(sec * 1000); const y = (n)=>n<10?'0'+n:n;
+  return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())}`;
+}
+function fmtNextText(sec, tz){ if(!sec) return '—'; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${fmtWall(sec, tz)} · ${rel}` }
 function tzLabel(tz) {
   // correct UTC offset via Intl (BUG-27: local-diff hack printed UTC-0.000…)
   try {
@@ -780,7 +793,7 @@ function countdownTick() {
     el.textContent = d > 0 ? d + 'd ' + h + ':' + pad(m) + ':' + pad(sec) : h > 0 ? h + ':' + pad(m) + ':' + pad(sec) : m + ':' + pad(sec);
   });
 }
-function fmtNext(sec){ if(!sec) return '—'; const d=new Date(sec*1000); const y=(n)=>n<10?'0'+n:n; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())} <span class="muted">· ${rel}</span>` }
+function fmtNext(sec, tz){ if(!sec) return '—'; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${fmtWall(sec, tz)} <span class="muted">· ${rel}</span>` }
 
 /* ---------- toasts / dialogs / menus (site components, no native popups) ---------- */
 // BUG-29/BUG-40: hydrate [data-icon] placeholders idempotently. The

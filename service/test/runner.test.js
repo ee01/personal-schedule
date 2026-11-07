@@ -443,6 +443,19 @@ test('refresh errors and cached lastError never contain the source URL', async (
   const pr = await proj[1]({ headers: { authorization: `Bearer ${atoken}` }, params: { project: 'mThor' } });
   assert.ok(!JSON.stringify(pr).includes('heimdall-xmn02'), 'no source host in the cached project state');
   assert.ok(pr.lastError === null || String(pr.lastError).includes('[源地址已隐藏]') || !String(pr.lastError).includes('http'), `lastError sanitized: ${pr.lastError}`);
+
+  // rotation gap (Sol retest): an OLD cached error carrying a PREVIOUS
+  // source host must also be masked — redaction may not depend on the
+  // CURRENT template only
+  db.prepare("UPDATE timeline_cache SET last_error = ? WHERE project = 'mThor'")
+    .run('Failed to parse URL from http://OLD-SOURCE.internal.example:8443/api/get_release_info/?project=mThor');
+  const pr2 = await proj[1]({ headers: { authorization: `Bearer ${atoken}` }, params: { project: 'mThor' } });
+  const b2 = JSON.stringify(pr2);
+  assert.ok(!b2.includes('OLD-SOURCE') && !/https?:\/\/[^"]+/.test(b2), `old-host URL masked after rotation: ${pr2.lastError}`);
+  // and via redactSource directly for arbitrary eras
+  const tl = services.timeline || (await import('../src/timeline.js')).createTimeline(db, {});
+  const masked = tl.redactSource('boom at http://even-older.example/x and https://another.host/y');
+  assert.ok(!masked.includes('even-older.example') && !masked.includes('another.host'), 'any URL in errors is masked');
 });
 
 

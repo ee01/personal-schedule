@@ -30,18 +30,14 @@ export function createTimeline(db, { notify, onTaskNeedsAttention }) {
   // used to reach clients via refresh results and the project cache's
   // lastError. Redact both the built URL and the configured template.
   function redactSource(message) {
-    const template = setting('sourceUrl', process.env.SCHEDULE_TIMELINE_SOURCE_URL || '');
     let out = String(message ?? '');
-    if (template) {
-      out = out.split(template).join('[源地址已隐藏]');
-      for (const project of PROJECTS) {
-        const url = template.includes('{project}') ? template.replace('{project}', encodeURIComponent(project.id)) : template;
-        if (url) out = out.split(url).join('[源地址已隐藏]');
-      }
-    }
-    // defense in depth: any http(s) URL in an error string is deployment
-    // internal detail — mask the host part
-    out = out.replace(/https?:\/\/[^\s'"]+/g, (m) => (template && m.includes(template.slice(0, 20)) ? '[源地址已隐藏]' : m));
+    const template = setting('sourceUrl', process.env.SCHEDULE_TIMELINE_SOURCE_URL || '');
+    if (template) out = out.split(template).join('[源地址已隐藏]');
+    // rotation-safe: error strings may carry the URL of a PREVIOUS source
+    // configuration (different host) — deployment-internal addresses must
+    // never surface regardless of which config era produced the error, so
+    // mask every http(s) URL, not just ones matching the current template
+    out = out.replace(/https?:\/\/[^\s'"]+/g, '[源地址已隐藏]');
     return out;
   }
 
