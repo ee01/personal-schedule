@@ -298,3 +298,10 @@
 - **生产核验**：既有 34 条 rc 连接全部使用默认可信 origin（无中断）；`SCHEDULE_RC_TEST_ORIGINS` 生产未设置 ✓。
 - 87/87 单测（新增 origin 矩阵/不可信拒绝/裸 200 拒绝/重定向拒绝/pre-boundary 回退/PUT 拒存）；全部探针在边界下重过（13/9/28/10/11/11/30）+ r12 11/11 + 启动冒烟 0 错误。
 - **部署指纹**：`/app`=`83cdeda5…`、`/app/app.js`=`c1cc009f…`、`/share/index.html`=`0d84109a…`（不变）；providers/api/store/server md5 与提交一致。
+
+## 2026-11-07 · 第 13 轮：BUG-61 收尾——Bot OAuth 直接 fetch 纳入拒绝重定向门禁（89/89，已部署）
+
+- **根因**：`rcAccessToken` 的 Bot 分支用裸 `fetch()`（未走 `httpJson` 的 `redirect:'error'` 门禁）——token 端点 302 被跟随：同 origin 路径跳转把 Basic Authorization 带到第二路径（第二路径返回受控 token 后验证仍 ok:true）；跨 origin 302 也被跟随（跨主机 Authorization 被 Node 剥离，未泄露，但请求到达第二目标）。
+- **修复**：token POST 同样 `redirect:'error'`；并对授权响应做结构校验（200 无 access_token 不是授权）。
+- **回归（89/89）**：同 origin 路径重定向拒绝（第二路径不再能完成验证）、跨 origin 重定向拒绝、裸 200 无 token 拒绝。r12 探针 11/11、启动冒烟 0 错误。
+- **部署指纹**：providers.js md5 `9df1e72c…` 与提交一致；静态指纹不变（纯服务端）：`/app`=`83cdeda5…`、`app.js`=`c1cc009f…`、share=`0d84109a…`。
