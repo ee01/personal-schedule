@@ -13,6 +13,9 @@ async function httpJson(method, url, { headers = {}, body, timeoutMs } = {}) {
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
+      // BUG-61/62 boundary: a redirect would carry Authorization headers to a
+      // different origin — RC/jira APIs never redirect; refuse instead
+      redirect: 'error',
     });
     const text = await response.text();
     let json = null;
@@ -27,8 +30,31 @@ async function httpJson(method, url, { headers = {}, body, timeoutMs } = {}) {
   }
 }
 
+// RC trust boundary: every RC-bound request (auth, verification, directory,
+// dispatch) must target a deployment-trusted origin. This closes the gap
+// where an ordinary user's serverUrl could aim their Bearer token at an
+// arbitrary host, and where a redirect could carry it off-origin.
+const RC_DEFAULT_SERVER = 'https://platform.ringcentral.com';
+export function isTrustedRcOrigin(rawServerUrl) {
+  let origin;
+  try {
+    origin = new URL(String(rawServerUrl || RC_DEFAULT_SERVER)).origin;
+  } catch {
+    return false;
+  }
+  const list = [...config.rcTrustedOrigins, ...(config.rcTestOrigins || [])];
+  return list.includes(origin);
+}
+function rcServerUrl(connection) {
+  const server = String(connection.serverUrl || RC_DEFAULT_SERVER).replace(/\/+$/, '');
+  if (!isTrustedRcOrigin(server)) {
+    throw new HttpError(403, 'RC serverUrl 不在部署可信 origin 白名单（SCHEDULE_RC_TRUSTED_ORIGINS）');
+  }
+  return server;
+}
+
 async function rcAccessToken(connection) {
-  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const server = rcServerUrl(connection); // trust-gated, redirects refused
   if (connection.kind === 'bot') {
     if (connection.token && (!connection.tokenExpiresAt || connection.tokenExpiresAt > nowSec() + 60)) {
       return connection.token;
@@ -52,7 +78,7 @@ async function rcAccessToken(connection) {
 }
 
 export async function rcPostMessage(connection, kind, { chatId, text }) {
-  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind });
   const response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
     headers: {
@@ -70,13 +96,20 @@ export async function rcPostMessage(connection, kind, { chatId, text }) {
 }
 
 export async function rcWhoAmI(connection, kind) {
-  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind });
   const response = await httpJson('GET', `${server}/restapi/v1.0/account/~/extension/~`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   if (!response.ok) throw new HttpError(502, `rc auth check failed (${response.status})`);
-  return response.json;
+  // a bare 200 is NOT proof of authorization — the payload must look like an
+  // RC extension record (id / extensionNumber / name); anything else is a
+  // misconfigured or hostile endpoint and fails verification
+  const who = response.json;
+  const shaped = who && typeof who === 'object' && !Array.isArray(who)
+    && (typeof who.id === 'string' || typeof who.id === 'number' || who.extensionNumber !== undefined);
+  if (!shaped) throw new HttpError(502, 'rc auth check response malformed (not an extension record)');
+  return who;
 }
 
 function sha256HexSync(value) {
@@ -88,7 +121,7 @@ function sha256HexSync(value) {
 // exists for a real match; unmatched input never fabricates a contact.
 
 export async function rcDirectorySearch(connection, query) {
-  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken(connection);
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
@@ -127,7 +160,7 @@ export async function rcDirectorySearch(connection, query) {
 }
 
 export async function rcBotsList(connection) {
-  const server = String(connection.serverUrl || 'https://platform.ringcentral.com').replace(/\/+$/, '');
+  const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind: 'bot' });
   const me = await httpJson('GET', `${server}/restapi/v1.0/account/~/extension/~`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },

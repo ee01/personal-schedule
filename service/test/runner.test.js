@@ -2,6 +2,7 @@ import test from 'node:test';
 const dbSet = (db, sql) => db.prepare(sql).run();
 const dbGet = (db, sql) => db.prepare(sql).get();
 import assert from 'node:assert/strict';
+import * as providersRef from '../src/providers.js';
 import crypto from 'node:crypto';
 import { openDb } from '../src/db.js';
 import { buildServices } from '../src/server.js';
@@ -15,8 +16,20 @@ function fresh() {
   const db = openDb(':memory:');
   const services = buildServices(db);
   const user = services.auth.ensureUser('test@example.com');
-  const getConnection = (uid, key) =>
-    parseJson(db.prepare('SELECT value FROM connections WHERE user_id = ? AND key = ?').get(uid, key)?.value, null);
+  const getConnection = (uid, key) => {
+    const row = db.prepare('SELECT value, verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(uid, key);
+    if (!row) return null;
+    const value = parseJson(row.value, null);
+    if (value && typeof value === 'object') {
+      value._verified = row.verified === null ? 0 : row.verified;
+      if (row.verify_error) value._verifyError = row.verify_error;
+      if (key === 'rc_user' || key === 'rc_bot') {
+        // mirror server.js: untrusted RC targets read as non-working
+        value._trusted = providersRef.isTrustedRcOrigin(value.serverUrl || 'https://platform.ringcentral.com');
+      }
+    }
+    return value;
+  };
   const store = createTaskStore(db, getConnection);
   return { db, ...services, user, store, getConnection };
 }
@@ -371,7 +384,7 @@ test('dispatch path renders content variables in the SPEC timezone (real taskFro
     type: 'asme', status: 'active', content: 'LA {{datetime}}',
     scheduleSpec: { kind: 'one_shot', dateTime: at, timezone: 'America/Los_Angeles' },
   });
-  ctx.db.prepare('UPDATE tasks SET status = ?, next_run_at = ? WHERE id = ?').run('active', at - 1, task.id);
+  ctx.db.prepare('UPDATE tasks SET status = ?, next_run_at = ? WHERE id = ?').run('active', at, task.id); // occurrence scheduled_for == at
   let sent = null;
   const original = providers.asme.run;
   providers.asme.run = async ({ task: t, occurrence }) => {
@@ -596,4 +609,81 @@ test('timeline settings are admin-only: regular bound accounts cannot read the s
   } finally {
     config.adminEmails = [];
   }
+});
+
+
+// RC trust boundary: verification, directory and dispatch all refuse
+// untrusted targets; redirects are refused; a bare 200 is not authorization
+test('RC trust boundary: untrusted origins rejected, redirects refused, response shape validated', async () => {
+  const { isTrustedRcOrigin, rcWhoAmI } = await import('../src/providers.js');
+  const { config } = await import('../src/config.js');
+  const http = await import('node:http');
+
+  // 1. origin allowlist
+  assert.equal(isTrustedRcOrigin('https://platform.ringcentral.com'), true, 'default RC origin trusted');
+  assert.equal(isTrustedRcOrigin(undefined), true, 'no serverUrl → default origin trusted');
+  assert.equal(isTrustedRcOrigin('http://127.0.0.1:45999'), false, 'plain localhost NOT trusted by default');
+  assert.equal(isTrustedRcOrigin('https://evil.example'), false, 'arbitrary host not trusted');
+  config.rcTestOrigins = ['http://127.0.0.1:45999']; // isolated test config only
+  try {
+    assert.equal(isTrustedRcOrigin('http://127.0.0.1:45999'), true, 'test origin trusted in test config');
+  } finally { config.rcTestOrigins = []; }
+
+  // 2. rcWhoAmI refuses untrusted targets outright (no Bearer leaves)
+  await assert.rejects(() => rcWhoAmI({ serverUrl: 'https://evil.example', token: 'tok' }, 'user'),
+    /可信 origin|forbidden/i, 'untrusted serverUrl rejected');
+
+  // 3. a 200 response with a NON-extension payload fails verification
+  const mkStub = (handler) => new Promise((resolve) => {
+    const srv = http.createServer(handler);
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const bad = await mkStub((rq, rs) => { rs.writeHead(200, { 'Content-Type': 'application/json' }); rs.end('{}'); });
+  config.rcTestOrigins = [`http://127.0.0.1:${bad.address().port}`];
+  try {
+    await assert.rejects(() => rcWhoAmI({ serverUrl: `http://127.0.0.1:${bad.address().port}`, token: 'tok' }, 'user'),
+      /malformed|not an extension/i, 'bare 200 with junk payload is not authorization');
+  } finally { config.rcTestOrigins = []; bad.closeAllConnections?.(); await new Promise((r) => bad.close(r)); }
+
+  // 4. redirects are refused (a 302 would carry Authorization off-origin)
+  const redir = await mkStub((rq, rs) => { rs.writeHead(302, { Location: 'https://evil.example/x' }); rs.end(); });
+  config.rcTestOrigins = [`http://127.0.0.1:${redir.address().port}`];
+  try {
+    await assert.rejects(() => rcWhoAmI({ serverUrl: `http://127.0.0.1:${redir.address().port}`, token: 'tok' }, 'user'),
+      /redirect|failed/i, 'redirect refused');
+  } finally { config.rcTestOrigins = []; redir.closeAllConnections?.(); await new Promise((r) => redir.close(r)); }
+});
+
+// existing VERIFIED connections aimed at untrusted origins stop enabling execution
+test('a pre-boundary verified RC connection with an untrusted target reads as missing', async () => {
+  const ctx = fresh();
+  const { isTrustedRcOrigin } = await import('../src/providers.js');
+  // simulate a legacy row: verified=1 but serverUrl aimed at an arbitrary host
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)').run(
+    ctx.user.id, 'rc_user', JSON.stringify({ serverUrl: 'https://evil.example', token: 'tok', ownChatId: 'me' }), nowSec());
+  const { task } = insertTask(ctx, { type: 'asme', status: 'active', config: { chatId: 'c1' } });
+  const row = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
+  assert.ok(row.missing.includes('connection:rc_user'), `untrusted target counts as missing (missing=${JSON.stringify(row.missing)})`);
+  assert.equal(row.status, 'inactive', 'execution not enabled on an untrusted target');
+  // control: the default origin (no serverUrl) is fine
+  ctx.db.prepare('UPDATE connections SET value = ? WHERE user_id = ? AND key = ?').run(
+    JSON.stringify({ token: 'tok', ownChatId: 'me' }), ctx.user.id, 'rc_user');
+  ctx.store.recomputeMissing(ctx.user.id, task.id);
+  const ok = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
+  assert.ok(!ok.missing.includes('connection:rc_user'), 'default origin trusted as before');
+});
+
+// PUT /connections refuses to store an untrusted RC target at all
+test('PUT /connections rejects an untrusted RC serverUrl before saving', async () => {
+  const ctx = fresh();
+  const { registerRoutes } = await import('../src/api.js');
+  const routes = [];
+  const app = { get: (p, h) => routes.push(['GET', p, h]), post: (p, h) => routes.push(['POST', p, h]), put: (p, h) => routes.push(['PUT', p, h]), patch(){}, delete(){} };
+  registerRoutes(app, { db: ctx.db, auth: ctx.auth, store: ctx.store, timeline: ctx.timeline, runner: ctx.runner, shares: ctx.shares, notify: ctx.notify, getConnections: ctx.getConnections });
+  const put = routes.find(([m, p]) => m === 'PUT' && p === '/api/v1/connections/{key}')[2];
+  const tok = ctx.auth.issueToken(ctx.user.id, 't');
+  await assert.rejects(async () => put({ headers: { authorization: `Bearer ${tok}` }, params: { key: 'rc_user' }, body: { value: { serverUrl: 'https://evil.example', token: 'x', ownChatId: 'me' } } }),
+    /可信 origin|bad request/i, 'untrusted RC target rejected at save time');
+  const stored = ctx.db.prepare('SELECT COUNT(*) n FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'rc_user');
+  assert.equal(stored.n, 0, 'nothing stored for an untrusted target');
 });

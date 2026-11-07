@@ -767,6 +767,12 @@ function fmtWall(sec, tz){
   return `${y(d.getMonth()+1)}/${y(d.getDate())} ${y(d.getHours())}:${y(d.getMinutes())}`;
 }
 function fmtNextText(sec, tz){ if(!sec) return '—'; const rel=(()=>{ const ms=sec*1000-Date.now(); if(ms<0) return '已过'; const dd=Math.floor(ms/864e5), hh=Math.floor(ms/36e5)%24; if(dd) return dd+' 天后'; if(hh) return hh+' 小时后'; return Math.max(1,Math.floor(ms/6e4))+' 分钟后' })(); return `${fmtWall(sec, tz)} · ${rel}` }
+function tzOffsetLabel(tz) {
+  try {
+    const part = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName');
+    return String((part && part.value) || '').replace('GMT', 'UTC') || 'UTC';
+  } catch { return 'UTC'; }
+}
 function tzLabel(tz) {
   // correct UTC offset via Intl (BUG-27: local-diff hack printed UTC-0.000…)
   try {
@@ -774,7 +780,10 @@ function tzLabel(tz) {
     const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'shortOffset' });
     const part = fmt.formatToParts(now).find((x) => x.type === 'timeZoneName');
     const off = (part && part.value) || '';
-    return tz.split('/').pop().replace('_', ' ') + ' ' + off.replace('GMT', 'UTC');
+    // BUG-62: prefer the stable Chinese display name when the zone is one of
+    // the built-in choices, so the label matches the dropdown everywhere
+    const zh = (typeof TIMEZONES !== 'undefined' && TIMEZONES.find(([id]) => id === tz) || [])[1];
+    return (zh || tz.split('/').pop().replace('_', ' ')) + ' ' + off.replace('GMT', 'UTC');
   } catch { return tz; }
 }
 function countdownTick() {

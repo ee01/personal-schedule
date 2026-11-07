@@ -37,6 +37,16 @@ export const config = {
   // Extension install entry (share page install guide). The real Chrome Web
   // Store / CRX URL is deployment-specific; set SCHEDULE_EXT_INSTALL_URL.
   extInstallUrl: process.env.SCHEDULE_EXT_INSTALL_URL || '',
+  // RC trust boundary: the ONLY origins RC requests (verification, directory,
+  // dispatch) may target. Ordinary users cannot point their RC credentials at
+  // an arbitrary server — the Bearer token would be forwarded there.
+  // Extend only via deployment env; SCHEDULE_RC_TEST_ORIGINS exists solely
+  // for isolated test configurations (localhost stubs) and must never be
+  // set in production.
+  rcTrustedOrigins: (process.env.SCHEDULE_RC_TRUSTED_ORIGINS || 'https://platform.ringcentral.com')
+    .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
+  rcTestOrigins: (process.env.SCHEDULE_RC_TEST_ORIGINS || '')
+    .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
   // Deployment admins (SCHEDULE_ADMIN_EMAILS): the only identities allowed
   // to write deployment-level settings (timeline.*). Binding an email proves
   // account identity, NOT admin rights — default empty means the API accepts

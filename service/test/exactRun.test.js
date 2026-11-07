@@ -227,6 +227,11 @@ test('publishing after exact-run success uses explicit fields; retry does not re
   // publish pipeline can really deliver (publish would otherwise pause on the
   // missing rc_user connection — that path is covered by publish.test.js)
   const rc = await startMockRc();
+  // RC trust boundary: the local mock must be allowlisted as a TEST origin
+  // (isolated test config only — production never sets this)
+  const { config } = await import('../src/config.js');
+  const prevTestOrigins = config.rcTestOrigins;
+  config.rcTestOrigins = [`http://127.0.0.1:${rc.port}`];
   ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)').run(
     ctx.user.id,
     'memory',
@@ -269,7 +274,9 @@ test('publishing after exact-run success uses explicit fields; retry does not re
     // one occurrence only — publishing never re-runs the task
     const runs = ctx.db.prepare('SELECT COUNT(*) AS n FROM occurrences WHERE task_id = ?').get(task.id).n;
     assert.equal(runs, 1);
-  } finally {
+    } finally {
+    config.rcTestOrigins = prevTestOrigins;
+
     await closeMock(mock.server);
     await closeMock(rc.server);
   }

@@ -10,6 +10,7 @@ import { createApp, listen } from './http.js';
 import { registerRoutes } from './api.js';
 import { createRunner } from './runner.js';
 import { createTimeline } from './timeline.js';
+import * as providers from './providers.js';
 import { createNotify } from './notify.js';
 import { createShares } from './shares.js';
 import { parseJson, nowSec } from './util.js';
@@ -30,6 +31,12 @@ export function buildServices(db) {
       if (value && typeof value === 'object') {
         value._verified = row.verified === null ? 0 : row.verified;
         if (row.verify_error) value._verifyError = row.verify_error;
+        // RC trust boundary: an EXISTING connection pointing at an untrusted
+        // origin must not keep enabling execution even if it was verified
+        // before the boundary existed
+        if (key === 'rc_user' || key === 'rc_bot') {
+          value._trusted = providers.isTrustedRcOrigin(value.serverUrl || 'https://platform.ringcentral.com');
+        }
       }
       return value;
     }

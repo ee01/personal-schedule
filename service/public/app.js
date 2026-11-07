@@ -641,11 +641,13 @@ function cfStep4() {
     <div class="field" id="fTL2" style="display:none"><label>里程碑</label><select class="input" id="fMile"></select></div>
     <div class="field" id="fTL3" style="display:none"><label>偏移（天）</label><div class="row"><button class="btn ghost sm" data-off="-">−</button><input class="input mono" id="fOff" type="number" value="${+t.off || 0}" style="width:70px"><button class="btn ghost sm" data-off="+">＋</button></div></div>
     <div class="field" id="fTL4" style="display:none"><label>时刻</label><input class="input" type="time" id="fTimeTL" value="${esc(t.at)}"></div>
-    <div class="field"><label>时区</label><select class="input" id="fTz">${TIMEZONES.map(([id, label])=>`<option value="${id}" ${t.tz===id?'selected':''}>${label}</option>`).join('')}</select></div>
+    <div class="field"><label>时区</label><select class="input" id="fTz">${TIMEZONES.map(([id, name])=>`<option value="${id}" ${t.tz===id?'selected':''}>${name} · ${tzOffsetLabel(id)}</option>`).join('')}</select></div>
   </div>
   <div class="content-box" style="margin-top:10px"><div class="cb-h">预览</div><div id="cfNextPrev" class="muted"></div></div>`;
 }
-const TIMEZONES = [['Asia/Shanghai','上海 · UTC+8'],['UTC','UTC+0'],['Europe/London','伦敦'],['America/New_York','纽约'],['America/Los_Angeles','洛杉矶']];
+// BUG-62: stable Chinese names + a COMPUTED offset (DST-aware) — the old
+// static labels showed no offset for 3 of 5 zones
+const TIMEZONES = [['Asia/Shanghai','上海'],['UTC','UTC'],['Europe/London','伦敦'],['America/New_York','纽约'],['America/Los_Angeles','洛杉矶']];
 function cfStep5() {
   const spec = currentSpec();
   const unres = (CF.recipients || []).filter((r) => r.unresolved || !r.id);
@@ -655,7 +657,7 @@ function cfStep5() {
     ['内容', CF.content || (CF.type === 'outreach' ? (CF.config?.question || '') : '') || '待确认'],
     ['对象', CF.recipients.length ? CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') : '待确认'],
     ['规则', spec ? specText({ scheduleSpec: spec }) || '待确认' : '待确认'],
-    ['时区', (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai'],
+    ['时区', (() => { const z = (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai'; const zh = (TIMEZONES.find(([id]) => id === z) || [])[1]; return (zh || z) + ' · ' + tzOffsetLabel(z); })()],
   ];
   const hlHTML = (() => {
     // BUG-57: show WHAT the one-sentence parser recognized, highlighted

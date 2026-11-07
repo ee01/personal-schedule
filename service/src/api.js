@@ -13,7 +13,7 @@ import {
 } from './util.js';
 import { createTaskStore, CREATABLE_TYPES } from './store.js';
 import { nextRunAt } from './time.js';
-import { providers, rcWhoAmI, rcDirectorySearch, rcBotsList } from './providers.js';
+import { providers, rcWhoAmI, rcDirectorySearch, rcBotsList, isTrustedRcOrigin } from './providers.js';
 import { publishReasonText } from './notify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -734,6 +734,12 @@ function describeRole(type, cfg) {
     const key = req.params.key;
     if (!['rc_user', 'rc_bot', 'memory', 'multica', 'jira'].includes(key)) throw badRequest('unknown connection key');
     const value = req.body?.value ?? req.body;
+    // RC trust boundary: refuse to even store an RC target outside the
+    // deployment-trusted origins — never forward user Bearer tokens there
+    if ((key === 'rc_user' || key === 'rc_bot') && value && typeof value === 'object'
+        && value.serverUrl && !isTrustedRcOrigin(value.serverUrl)) {
+      throw badRequest('RC serverUrl 不在部署可信 origin 白名单（SCHEDULE_RC_TRUSTED_ORIGINS）');
+    }
     // BUG-59: saving runs the SAME verification the test endpoint uses and
     // records the outcome — saved, verified, or failed is explicit state,
     // never silently healthy

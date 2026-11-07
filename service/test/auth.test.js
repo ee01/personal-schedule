@@ -285,6 +285,9 @@ test('single-device mode is a FULL account: active tasks, connections, schedulin
     });
     await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
     const stubUrl = `http://127.0.0.1:${stub.address().port}`;
+    // RC trust boundary: the local stub must be allowlisted as a TEST origin
+    // (isolated test config only — production never sets this)
+    __config.rcTestOrigins = [stubUrl];
     try {
     const conn = await ctx.req('PUT', '/api/v1/connections/rc_user', {
       cookie: guestCookie, body: { value: { serverUrl: stubUrl, token: 'tok-x', ownChatId: 'me' } },
@@ -319,6 +322,8 @@ test('single-device mode is a FULL account: active tasks, connections, schedulin
     const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
     assert.equal(guests.n, 0, 'single-device account cleaned up after binding');
     } finally {
+      __config.rcTestOrigins = [];
+      stub.closeAllConnections?.(); // undici keep-alive sockets would block close()
       await new Promise((r3) => stub.close(r3));
     }
   } finally {
@@ -483,6 +488,7 @@ test('directory/bots/timeline-projects endpoints (X1/X3/X4) with a mock RC', asy
     });
     await new Promise((r) => dirServer.listen(0, '127.0.0.1', r));
     const rcPort = dirServer.address().port;
+    __config.rcTestOrigins = [`http://127.0.0.1:${rcPort}`]; // isolated test config only
     await ctx.req('PUT', '/api/v1/connections/rc_user', {
       cookie, body: { value: { serverUrl: `http://127.0.0.1:${rcPort}`, token: 'user-token' } },
     });
@@ -525,6 +531,8 @@ test('directory/bots/timeline-projects endpoints (X1/X3/X4) with a mock RC', asy
     assert.ok(list.some((p) => p.id === 'mThor' && p.name === 'mThor'));
     assert.ok(list.every((p) => Array.isArray(p.milestones)), 'milestones array present (dates when cached)');
 
+    __config.rcTestOrigins = [];
+    dirServer.closeAllConnections?.();
     await new Promise((r) => dirServer.close(r));
   } finally {
     await new Promise((r2) => ctx.server.close(r2));

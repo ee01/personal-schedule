@@ -50,10 +50,13 @@ export function createTaskStore(db, getConnection) {
   function computeMissing(userId, type, config, notify, content) {
     const missing = [];
     // BUG-59: a saved-but-FAILED verification is not a working connection —
-    // the task stays honestly incomplete instead of silently executable
+    // the task stays honestly incomplete instead of silently executable.
+    // RC trust boundary: a connection aimed at an untrusted origin is equally
+    // non-working, even if it was verified before the boundary existed.
     const con = (key) => {
       const c = getConnection(userId, key);
-      return c && c._verified !== -1 ? c : null;
+      if (!c || c._verified === -1 || c._trusted === false) return null;
+      return c;
     };
     if (type === 'asme' || type === 'bot') {
       if (!config.chatId) missing.push('chatId');
