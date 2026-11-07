@@ -263,3 +263,15 @@
 - **共享设置越权**：`PUT /settings/{key}` 无条件拒绝 `timeline.lastRefreshAt`（内部冷却标记，关闭冷却绕过）；其余 `timeline.*` 写入仅限已绑定邮箱账户（关闭全局 sourceUrl 改写）；单设备任务能力不受影响。
 - **错误路径泄露源地址**：刷新失败信息在写入时（last_error）与 API 边界（refresh 结果、/timeline/projects lastError 含历史行）双重遮蔽——覆盖配置模板、按项目构建的 URL 及同前缀任意 URL。
 - 81/81 单测（新增：JOIN 映射/时区渲染、guest PUT 两条拒绝、泄露遮蔽）；启动冒烟 0 JS 错误；已部署（服务端三文件 md5 与提交一致；静态指纹不变属预期）。
+
+## 2026-11-07 · 第 10 轮：BUG-48/50/59/60 + 连接验证语义 + 管理员白名单 + 定向清理（完成，83/83，已部署）
+
+- **BUG-48**：接收页移除「访客」字样。
+- **BUG-50**：视图内 `[data-nav]` 按钮（补全卡片、空态）此前未绑定——点击无效；已接线（探针验证导航生效）。
+- **BUG-59**：连接四态（未配置/已保存未验证/验证成功/验证失败）。迁移 v9 增加验证列；PUT 保存即服务端验证并记录结果；GET 暴露状态；**验证失败的连接在 computeMissing 中计为缺失**（无效 Bot 凭据不再静默满足缺项）、recomputeMissing 不降级草稿；连接对话框 await 异步 onOk（原 dlgOk 委派在验证完成前就关闭所有对话框——静默关闭根因），验证失败保持打开并显示原因；Multica 卡不再渲染字面 undefined；卡片与侧栏状态点四态显示（失败为红点）。
+- **权限收紧（Sol 后续）**：绑定邮箱 ≠ 管理员——`timeline.*` 写入现需 `SCHEDULE_ADMIN_EMAILS` 白名单（默认空=API 完全不可写，只能服务器侧管理）；生产已配置 `a@eexx.me`。
+- **BUG-60**：`schedulePreview` 以维护循环同一 `computeTargetInstant` 规则从发布缓存计算 timeline `next_run_at`（此前 API 创建/启用的 timeline 任务 next_run_at 恒 null——服务器不可见且 Runner 永不触发）。受控时钟测试：种子 FF 缓存→active 任务→next_run_at=计算时刻→推进 Date.now→Runner 恰好触发一次（occ_key 防重复）。
+- **上轮时区修复实际落地**：上轮 runner.js 的 taskFromJoin 修改**未进入提交**（其测试手工模拟了映射，未驱动真实函数）——本轮测试驱动真实派发路径端到端断言 LA 规格时区渲染。
+- **探针**：r10 10/10；r5/r6/r7/ui16 更新为使用本地 stub 连接服务器（死端口连接现诚实验证失败）：13/13、9/9、28/28、30/30；启动冒烟 0 错误；83/83 单测。
+- **定向清理**：按标题+时间窗+假目标+身份确认 Opus 遗留测试身份 `usr_04a9…`（guest `gst_54d0…`，4 条 QA 任务，3 条含假 qa-chat-2，1 session，1 假 rc 连接），预检通过后事务内永久删除该身份全部数据；其他 23 条真实任务完好。
+- **部署指纹**：`/app`=`0f800bca…`、`/app/app.js`=`898ecc27…`、`/share/index.html`=`0d84109a…`；服务端四文件 md5 与提交一致。
