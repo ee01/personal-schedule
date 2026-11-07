@@ -361,6 +361,7 @@ function drawerHTML() {
         ${t.next_run_at?`<div class="kv"><span>下一次运行</span><span class="mono countdown" data-at="${t.next_run_at}"></span></div>`:''}
         ${['active','paused'].includes(t.status) && nextRunsOf(t, 3).length > 1 ? `<div class="kv"><span>后续运行</span><span class="mono" style="font-size:12px">${nextRunsOf(t, 3).slice(1).map((a) => fmtDT(a, t.timezone)).join('<br>')}</span></div>` : ''}
         ${s.kind==='timeline'?`<div class="kv"><span>版本信息</span><span>${esc((S.timeline.find(p=>p.id===s.project)||{}).currentRelease||'—')} · 刷新时间 ${((S.timeline.find(p=>p.id===s.project)||{}).fetchedAt? new Date(((S.timeline.find(p=>p.id===p)||{}).fetchedAt||0)*1000).toLocaleString():'—')}</span></div>`:''}
+        <div class="kv"><span>时区</span><span>${esc(tzLabel(t.timezone || s.timezone || 'Asia/Shanghai'))} <span class="muted">（规则与后续运行均按此时区显示）</span></span></div>
         <div class="kv"><span>时间源</span><span class="muted">Schedule Service（单一调度器）</span></div></div>
       <div class="content-box"><div class="cb-h">内容与对象</div>
         ${t.content?`<div class="kv"><span>内容</span><span>${esc(t.content)}</span></div>`:''}
