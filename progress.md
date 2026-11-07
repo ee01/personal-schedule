@@ -275,3 +275,10 @@
 - **探针**：r10 10/10；r5/r6/r7/ui16 更新为使用本地 stub 连接服务器（死端口连接现诚实验证失败）：13/13、9/9、28/28、30/30；启动冒烟 0 错误；83/83 单测。
 - **定向清理**：按标题+时间窗+假目标+身份确认 Opus 遗留测试身份 `usr_04a9…`（guest `gst_54d0…`，4 条 QA 任务，3 条含假 qa-chat-2，1 session，1 假 rc 连接），预检通过后事务内永久删除该身份全部数据；其他 23 条真实任务完好。
 - **部署指纹**：`/app`=`0f800bca…`、`/app/app.js`=`898ecc27…`、`/share/index.html`=`0d84109a…`；服务端四文件 md5 与提交一致。
+
+## 2026-11-07 · 部署级设置权限收口完成（84/84，已部署+线上验证）
+
+- **读写双向 admin-only**：`GET /settings` 对 guest 与**普通绑定账户**均遮蔽 `timeline.sourceUrl`（显示 "(deployment admins only)"）；`PUT timeline.*` 仅 `SCHEDULE_ADMIN_EMAILS` 白名单可写（默认空=API 完全不可写）；`lastRefreshAt` 对**任何人**（含管理员）均不可客户端写入；timeline 读取与受限刷新对所有身份保留。
+- 新回归：guest+普通绑定账户读遮蔽/写拒绝/配置未被改动；白名单管理员可读写（84/84）。
+- **线上实测**：guest PUT 403（部署管理员）/ lastRefreshAt 403 / GET 遮蔽 / timeline 读取 200；E 管理令牌 GET 显示真实 URL、同值回写 200 且值不变、lastRefreshAt 同样 403。
+- 部署：`api.js` md5 与提交一致（f9228a7d…）；静态指纹同上轮（本轮纯服务端）。
