@@ -3,6 +3,7 @@
 //   SCHEDULE_PORT=4557 node src/server.js   (separate shell)
 //   node deploy/ui16-probe.mjs
 import { chromium } from '/Users/Esone/.npm/_npx/9833c18b2d85bc59/node_modules/playwright/index.mjs';
+import { startStub } from './lib/stub-server.mjs';
 const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell';
 const BASE = 'http://127.0.0.1:4557';
 const browser = await chromium.launch({ executablePath: EXE, timeout: 15000 });
@@ -18,12 +19,13 @@ const api = (path, method = 'GET', body) => page.evaluate(async ({ path, method,
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await page.goto(BASE + '/app', { waitUntil: 'domcontentloaded', timeout: 15000 });
-await sleep(2500); // guest sign-in + first load
+await sleep(2500);
+const stub = await startStub(); // guest sign-in + first load
 
 // ---------- seed: 2 tags, memory connection, a paused + an active task ----------
 await api('/tags', 'POST', { name: 'QA-A', color: '#cdf26b' });
 await api('/tags', 'POST', { name: 'QA-B', color: '#7fe0c3' });
-await api('/connections/memory', 'PUT', { value: { baseUrl: 'http://127.0.0.1:9/v', userKey: 'probe-key' } });
+await api('/connections/memory', 'PUT', { value: { baseUrl: stub.url, userKey: 'probe-key' } }); // stub passes verification
 const mk = async (title, spec) => (await api('/tasks', 'POST', { type: 'agent_task', title, content: 'probe ' + title, scheduleSpec: spec, config: { executor: 'memory', mode: 'read' }, notify: {}, status: 'draft', idempotencyKey: 'seed-' + title })).body.task.id;
 const tPaused = await mk('暂停的探针', { kind: 'cron', expr: '0 10 * * *', timezone: 'Asia/Shanghai' });
 await api('/tasks/' + tPaused + '/status', 'POST', { status: 'active' });

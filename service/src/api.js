@@ -471,7 +471,23 @@ function describeRole(type, cfg) {
   function schedulePreview(taskId) {
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task) return;
-    const upcoming = task.status === 'active' ? nextRunAt(task) : null;
+    let upcoming = task.status === 'active' ? nextRunAt(task) : null;
+    // BUG-60: timeline specs are occurrence-computed by the timeline module —
+    // the generic nextRunAt() returned null, so the server never showed a
+    // schedule time and the runner never fired. Compute it here from the
+    // cached release data with the SAME rule (computeTargetInstant) the
+    // maintenance loop uses; only future instants schedule (missed-window
+    // handling with its grace period stays in the timeline module).
+    if (upcoming === null && task.status === 'active') {
+      const spec = parseJson(task.schedule_spec, {});
+      if (spec.kind === 'timeline') {
+        const cache = timeline.cacheFor(spec.project);
+        if (cache && cache.stale !== 1) {
+          const computed = timeline.computeTargetInstant(spec, cache.releases, task.timezone);
+          if (!computed.error && computed.instant > nowSec()) upcoming = computed.instant;
+        }
+      }
+    }
     db.prepare('UPDATE tasks SET next_run_at = ? WHERE id = ?').run(upcoming, taskId);
   }
 
@@ -701,36 +717,41 @@ function describeRole(type, cfg) {
   // ------------------------------------------------------------ connections
   app.get('/api/v1/connections', (req) => {
     const user = requireUser(db, auth, req);
-    const rows = db.prepare('SELECT key, value, updated_at FROM connections WHERE user_id = ?').all(user.id);
+    const rows = db.prepare('SELECT key, value, updated_at, verified, verified_at, verify_error FROM connections WHERE user_id = ?').all(user.id);
     const out = {};
     for (const row of rows) {
       const value = parseJson(row.value, {});
-      out[row.key] = { ...maskSecrets(row.key, value), updated_at: row.updated_at };
+      // BUG-59: verification state rides along — saved ≠ verified ≠ failed
+      out[row.key] = { ...maskSecrets(row.key, value), updated_at: row.updated_at,
+        verified: row.verified === null ? 0 : row.verified, verifiedAt: row.verified_at, verifyError: row.verify_error };
     }
     return out;
   });
 
-  app.put('/api/v1/connections/{key}', (req) => {
+  app.put('/api/v1/connections/{key}', async (req) => {
     const user = requireUser(db, auth, req);
     // guest boundary: no credential binding for visitor accounts
     const key = req.params.key;
     if (!['rc_user', 'rc_bot', 'memory', 'multica', 'jira'].includes(key)) throw badRequest('unknown connection key');
     const value = req.body?.value ?? req.body;
+    // BUG-59: saving runs the SAME verification the test endpoint uses and
+    // records the outcome — saved, verified, or failed is explicit state,
+    // never silently healthy
+    const test = await testConnectionValue(key, value);
+    const verified = test.ok === true ? 1 : -1;
     db.prepare(
-      `INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)
-       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ).run(user.id, key, json(value), nowSec());
-    // refresh derived task readiness
+      `INSERT INTO connections (user_id, key, value, updated_at, verified, verified_at, verify_error) VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at,
+         verified = excluded.verified, verified_at = excluded.verified_at, verify_error = excluded.verify_error`,
+    ).run(user.id, key, json(value), nowSec(), verified, nowSec(), test.ok === true ? null : (test.error || 'verification failed'));
+    // refresh derived task readiness (a FAILED connection reads as missing)
     for (const row of db.prepare('SELECT id FROM tasks WHERE user_id = ?').all(user.id)) {
       store.recomputeMissing(user.id, row.id);
     }
-    return { ok: true, saved: maskSecrets(key, value) };
+    return { ok: true, saved: maskSecrets(key, value), verification: { state: test.ok === true ? 'ok' : 'failed', detail: test.detail || null, error: test.ok === true ? null : (test.error || 'verification failed') } };
   });
 
-  app.post('/api/v1/connections/{key}/test', async (req) => {
-    const user = requireUser(db, auth, req);
-    const key = req.params.key;
-    const value = req.body?.value ?? getConnections(user.id, key);
+  async function testConnectionValue(key, value) {
     try {
       if (key === 'rc_user' || key === 'rc_bot') {
         const who = await rcWhoAmI(value, key === 'rc_bot' ? 'bot' : 'user');
@@ -758,6 +779,13 @@ function describeRole(type, cfg) {
     } catch (error) {
       return { ok: false, error: String(error.message || error) };
     }
+  }
+
+  app.post('/api/v1/connections/{key}/test', async (req) => {
+    const user = requireUser(db, auth, req);
+    const key = req.params.key;
+    const value = req.body?.value ?? getConnections(user.id, key);
+    return testConnectionValue(key, value);
   });
 
   // ------------------------------------------------------------ settings
@@ -782,7 +810,12 @@ function describeRole(type, cfg) {
     // could otherwise bypass the refresh cooldown (timeline.lastRefreshAt=0)
     // or rewrite the global source URL. Normal task capability is untouched.
     if (req.params.key === 'timeline.lastRefreshAt') throw forbidden('timeline.lastRefreshAt 是内部冷却标记，不接受写入');
-    if (user.is_guest === 1) throw forbidden('部署级设置仅限已绑定邮箱的账户修改');
+    if (user.is_guest === 1) throw forbidden('部署级设置仅限部署管理员修改');
+    // binding an email proves identity, not admin rights — only the
+    // deployment admin allowlist may change deployment-wide settings
+    if (!config.adminEmails.includes(String(user.email || '').toLowerCase())) {
+      throw forbidden('部署级设置仅限部署管理员（SCHEDULE_ADMIN_EMAILS）修改');
+    }
     db.prepare('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(req.params.key, String(req.body?.value ?? req.body?.['']));
     timeline.refreshAndRecompute({ force: true }).catch(() => {});

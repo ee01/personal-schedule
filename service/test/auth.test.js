@@ -3,6 +3,7 @@
 //   (previously a 30-day session survived its PAT being revoked)
 // - token self-service (list/create) works for a logged-in user
 import test from 'node:test';
+import http from 'node:http';
 // dev fallback is explicit-test-env-only (production without a Resend key
 // must refuse); this suite opts in.
 process.env.SCHEDULE_AUTH_DEV_FALLBACK = '1';
@@ -275,11 +276,21 @@ test('single-device mode is a FULL account: active tasks, connections, schedulin
   try {
     const g = await ctx.req('POST', '/api/v1/auth/guest');
     const guestCookie = g.headers['set-cookie'][0].split(';')[0];
-    // single-device user binds a connection inline — no login wall
+    // single-device user binds a connection inline — no login wall. The
+    // credentials are VERIFIED against a local stub RC server (BUG-59: a
+    // saved connection is only real once verification passes).
+    const stub = http.createServer((rq, rs) => {
+      rs.writeHead(200, { 'Content-Type': 'application/json' });
+      rs.end(JSON.stringify({ name: 'Stub User', extensionNumber: '101' }));
+    });
+    await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
+    const stubUrl = `http://127.0.0.1:${stub.address().port}`;
+    try {
     const conn = await ctx.req('PUT', '/api/v1/connections/rc_user', {
-      cookie: guestCookie, body: { value: { token: 'tok-x', ownChatId: 'me' } },
+      cookie: guestCookie, body: { value: { serverUrl: stubUrl, token: 'tok-x', ownChatId: 'me' } },
     });
     assert.equal(conn.statusCode, 200, 'single-device user can bind credentials');
+    assert.equal((await conn.json()).verification.state, 'ok', 'verification passed against the stub');
     // and creates a fully ACTIVE task — scheduling persists server-side
     const created = await ctx.req('POST', '/api/v1/tasks', { cookie: guestCookie, body: {
       type: 'asme', title: '单设备可真实启用', content: 'x',
@@ -307,6 +318,9 @@ test('single-device mode is a FULL account: active tasks, connections, schedulin
     assert.ok(kept.n >= 1, 'run records preserved by the merge (not re-fired)');
     const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
     assert.equal(guests.n, 0, 'single-device account cleaned up after binding');
+    } finally {
+      await new Promise((r3) => stub.close(r3));
+    }
   } finally {
     await new Promise((r2) => ctx.server.close(r2));
   }

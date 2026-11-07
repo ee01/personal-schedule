@@ -37,6 +37,12 @@ export const config = {
   // Extension install entry (share page install guide). The real Chrome Web
   // Store / CRX URL is deployment-specific; set SCHEDULE_EXT_INSTALL_URL.
   extInstallUrl: process.env.SCHEDULE_EXT_INSTALL_URL || '',
+  // Deployment admins (SCHEDULE_ADMIN_EMAILS): the only identities allowed
+  // to write deployment-level settings (timeline.*). Binding an email proves
+  // account identity, NOT admin rights — default empty means the API accepts
+  // no deployment-setting writes at all (manage via server-side env/DB).
+  adminEmails: (process.env.SCHEDULE_ADMIN_EMAILS || '')
+    .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
   // E-184 install entry: the FIRST verifiably compatible published version
   // (verified via deploy/verify-ext-crx.mjs). '0.1.0' accepts the handshake
   // from any build; converge it only once the store package passes checks.

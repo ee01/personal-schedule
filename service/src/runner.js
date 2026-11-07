@@ -375,7 +375,7 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
     // memory-executor receipts are sent by memory via the notify booleans.
     const notifyRows = db
       .prepare(
-        `SELECT o.*, t.notify AS task_notify, t.config AS task_config, t.title, t.content FROM occurrences o
+        `SELECT o.*, t.notify AS task_notify, t.config AS task_config, t.title, t.content, t.timezone, t.schedule_spec AS task_schedule_spec FROM occurrences o
          JOIN tasks t ON t.id = o.task_id
          WHERE o.status IN ('succeeded','failed') AND o.notified = 0 AND t.type = 'agent_task'
            AND JSON_EXTRACT(t.config, '$.executor') = 'multica'`,
@@ -403,7 +403,7 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
     }
     const rows = db
       .prepare(
-        `SELECT o.*, t.notify AS task_notify, t.config AS task_config, t.title, t.content FROM occurrences o
+        `SELECT o.*, t.notify AS task_notify, t.config AS task_config, t.title, t.content, t.timezone, t.schedule_spec AS task_schedule_spec FROM occurrences o
          JOIN tasks t ON t.id = o.task_id
          WHERE o.status = 'succeeded' AND t.type = 'agent_task' AND o.publish_status IS NULL`,
       )
@@ -435,7 +435,11 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
       revision: row.revision,
       config: parseJson(row.task_config, {}),
       notify: parseJson(row.task_notify, {}),
-      scheduleSpec: parseJson(row.schedule_spec, {}),
+      // the dispatch JOIN aliases the spec as task_schedule_spec (row.schedule_spec
+      // is undefined there) — the old mapping produced an EMPTY spec and dropped
+      // the timezone, so content variables fell back to Shanghai (E-184 retest)
+      scheduleSpec: parseJson(row.task_schedule_spec ?? row.schedule_spec, {}),
+      timezone: row.timezone, // task-level timezone fallback for content variables
     };
   }
 

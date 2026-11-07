@@ -49,7 +49,12 @@ export function createTaskStore(db, getConnection) {
 
   function computeMissing(userId, type, config, notify, content) {
     const missing = [];
-    const con = (key) => getConnection(userId, key);
+    // BUG-59: a saved-but-FAILED verification is not a working connection —
+    // the task stays honestly incomplete instead of silently executable
+    const con = (key) => {
+      const c = getConnection(userId, key);
+      return c && c._verified !== -1 ? c : null;
+    };
     if (type === 'asme' || type === 'bot') {
       if (!config.chatId) missing.push('chatId');
       if (type === 'asme' && !con('rc_user')) missing.push('connection:rc_user');
@@ -358,7 +363,9 @@ export function createTaskStore(db, getConnection) {
     const task = getUserTask(userId, taskId);
     const current = decodeTask(task);
     const missing = computeMissing(userId, task.type, current.config, current.notify, current.content);
-    const status = missing.length ? 'inactive' : task.status === 'inactive' ? task.status : task.status;
+    // BUG-06 semantics: an incomplete DRAFT stays a draft (drafts never
+    // execute); executable statuses fall back to inactive
+    const status = missing.length ? (task.status === 'draft' ? 'draft' : 'inactive') : task.status;
     db.prepare('UPDATE tasks SET missing = ?, status = ?, updated_at = ? WHERE id = ?').run(
       JSON.stringify(missing),
       status,

@@ -20,10 +20,19 @@ export function buildServices(db) {
   const auth = createAuth(db);
   const getConnections = (userId, key) => {
     const row = key
-      ? db.prepare('SELECT value FROM connections WHERE user_id = ? AND key = ?').get(userId, key)
+      ? db.prepare('SELECT value, verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(userId, key)
       : db.prepare('SELECT key, value FROM connections WHERE user_id = ?').all(userId);
     if (!row) return null;
-    if (key) return parseJson(row.value, null);
+    if (key) {
+      const value = parseJson(row.value, null);
+      // BUG-59: carry the verification state so task-missing computation and
+      // the UI can distinguish saved / verified / failed
+      if (value && typeof value === 'object') {
+        value._verified = row.verified === null ? 0 : row.verified;
+        if (row.verify_error) value._verifyError = row.verify_error;
+      }
+      return value;
+    }
     const out = {};
     for (const entry of row) out[entry.key] = parseJson(entry.value, null);
     return out;

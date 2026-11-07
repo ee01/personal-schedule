@@ -241,6 +241,17 @@ CREATE TABLE directory_cache (
 ALTER TABLE tags ADD COLUMN deleted_at INTEGER;
 `,
   },
+  {
+    // v9 (BUG-59): connection verification state — 0 saved/unverified,
+    //   1 verified OK, -1 verification failed. A failed save must not look
+    //   healthy or silently satisfy task-missing computation.
+    version: 9,
+    up: `
+ALTER TABLE connections ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE connections ADD COLUMN verified_at INTEGER;
+ALTER TABLE connections ADD COLUMN verify_error TEXT;
+`,
+  },
 ];
 
 function migrate(db) {

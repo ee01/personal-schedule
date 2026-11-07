@@ -150,7 +150,7 @@ function render(){
       ${state.session?'':`<div class="hint" style="margin-bottom:10px">导入需要你的 Personal Schedule 身份：先在下方登录（或在已安装的 Personal AI 扩展中导入）。</div>`}
       <div class="row" style="margin-bottom:14px">
         ${state.session
-          ? `<span class="hint">已登录：${state.session.isGuest ? '单设备身份（本机访客，导入的任务保存在这台设备的账户里）' : esc(state.session.email)}</span>`
+          ? `<span class="hint">已登录：${state.session.isGuest ? '单设备身份（导入的任务保存在这台设备的账户里）' : esc(state.session.email)}</span>`
           : `<input type="password" id="login-token" placeholder="你的 Schedule API Token" style="flex:1;min-width:240px">
              <button class="ghost" id="login-btn">登录</button>`}
       </div>

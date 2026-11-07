@@ -2,6 +2,7 @@
 // leak in one-shot rule text), BUG-44 (id-only recipient falsely missing).
 // Official page, no injection. Local server on :4557.
 import { chromium } from '/Users/Esone/.npm/_npx/9833c18b2d85bc59/node_modules/playwright/index.mjs';
+import { startStub } from './lib/stub-server.mjs';
 const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell';
 const BASE = 'http://127.0.0.1:4557';
 const browser = await chromium.launch({ executablePath: EXE, timeout: 15000 });
@@ -19,6 +20,7 @@ const find = async (title) => ((await api('/tasks')).body || []).find((x) => x.t
 
 await page.goto(BASE + '/app', { waitUntil: 'domcontentloaded', timeout: 15000 });
 await sleep(2500);
+const stub = await startStub();
 
 // seed: draft + active asme tasks with a named recipient; one id-only; one one-shot
 const mk = (o) => api('/tasks', 'POST', { type: 'asme', content: 'x', scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' }, notify: {}, status: 'draft', idempotencyKey: 'r6-' + o.title, ...o });
@@ -26,7 +28,7 @@ const withRc = { title: 'R6-有收件人草稿', config: { chatId: 'chat-123', c
 const act = { title: 'R6-活动任务', config: { chatId: 'chat-123', chatName: '张三' }, scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' } };
 const idOnly = { title: 'R6-仅ID', config: { chatId: 'chat-456' } };
 const once = { title: 'R6-一次', scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 2 * 86400, timezone: 'Asia/Shanghai' }, config: {} };
-await api('/connections/rc_user', 'PUT', { value: { token: 'x', ownChatId: 'me' } }); // so the active seed can really activate
+await api('/connections/rc_user', 'PUT', { value: { serverUrl: stub.url, token: 'x', ownChatId: 'me' } }); // stub passes verification
 await mk(withRc); await mk(act); await mk(idOnly); await mk(once);
 const actOn = await api('/tasks/' + (await find('R6-活动任务')).id + '/status', 'POST', { status: 'active' });
 check('seed-active', (await find('R6-活动任务')).status === 'active', `seed active: ${actOn.status}`);

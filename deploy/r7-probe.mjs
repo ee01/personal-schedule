@@ -1,6 +1,7 @@
 // E-183 round-7 probe: BUG-45..58. Official page, no injection. Server on :4557
 // (started with SCHEDULE_DATA_DIR=/tmp/sched-r7 and mThor timeline seeded).
 import { chromium } from '/Users/Esone/.npm/_npx/9833c18b2d85bc59/node_modules/playwright/index.mjs';
+import { startStub } from './lib/stub-server.mjs';
 const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell';
 const BASE = 'http://127.0.0.1:4557';
 const browser = await chromium.launch({ executablePath: EXE, timeout: 15000 });
@@ -17,7 +18,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await page.goto(BASE + '/app', { waitUntil: 'domcontentloaded', timeout: 15000 });
 await sleep(2500);
-await api('/connections/rc_user', 'PUT', { value: { token: 'x', ownChatId: 'me' } }); // BUG-51
+const stub = await startStub();
+await api('/connections/rc_user', 'PUT', { value: { serverUrl: stub.url, token: 'x', ownChatId: 'me' } }); // stub passes verification
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500);
 
 // ---------- BUG-45: timeline preview matches the server rule ----------
@@ -82,7 +84,7 @@ check('BUG-47b', back && back.name === 'R7-标签', `undo restores the SAME tag 
 // ---------- BUG-51/52/58: connections page truth ----------
 await page.goto(BASE + '/app#/connections', { waitUntil: 'domcontentloaded' }); await sleep(1500);
 const connTxt = await page.$eval('#view', (e) => e.textContent);
-check('BUG-51', connTxt.includes('RingCentral 个人授权') && /已连接/.test(connTxt), 'RC card shows the real configured state');
+check('BUG-51', connTxt.includes('RingCentral 个人授权') && connTxt.includes('已连接（验证成功）'), 'RC card shows the verified state');
 check('BUG-52a', connTxt.includes('Memory') || true, ''); // memory dot below (sidebar)
 const dots = await page.$$eval('#connDots .dot', (els) => els.map((e) => e.title));
 check('BUG-52', dots.includes('Memory Service') && !dots.includes('Worker'), `dots: ${dots.join(',')}`);
@@ -104,7 +106,7 @@ check('BUG-54a', dTxt.includes('Web 创建') || dTxt.includes('Web 手动创建'
 check('BUG-54b', /20\d\d\/\d{1,2}\/\d{1,2}/.test(dTxt) && !/AM|PM/.test(dTxt), 'zh-CN datetime');
 // BUG-53: next-3-runs — active daily task
 const daily = await api('/tasks', 'POST', { type: 'agent_task', title: 'R7-每日', content: 'x', scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' }, config: { executor: 'memory', mode: 'read' }, notify: {}, status: 'active', idempotencyKey: 'r7-daily' });
-await api('/connections/memory', 'PUT', { value: { baseUrl: 'http://127.0.0.1:9/v', userKey: 'k' } });
+await api('/connections/memory', 'PUT', { value: { baseUrl: stub.url, userKey: 'k' } }); // stub passes verification
 await api('/tasks/' + daily.body.task.id + '/status', 'POST', { status: 'active' });
 await page.keyboard.press('Escape'); await sleep(300);
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500);

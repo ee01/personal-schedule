@@ -357,29 +357,37 @@ test('extension info serves the configured minimum version and handshake channel
 
 
 // group 1 (E-184 retest): the runner's JOIN must carry the task timezone so
-// content variables render in the spec's timezone, not a Shanghai fallback
-test('taskFromJoin carries scheduleSpec + timezone (content vars honor LA timezone)', async () => {
+// content variables render in the spec's timezone, not a Shanghai fallback.
+// This test exercises the REAL dispatch path end-to-end: a due occurrence is
+// picked up by runner.tick(), the task object comes from taskFromJoin, and the
+// stubbed provider records what renderContentVars actually produced.
+test('dispatch path renders content variables in the SPEC timezone (real taskFromJoin)', async () => {
+  const ctx = fresh();
   const { renderContentVars } = await import('../src/providers.js');
-  // the shape dispatchPending builds: spec aliased as task_schedule_spec
-  const row = {
-    task_id: 'tsk_1', user_id: 'u1', title: '站会', content: '{{datetime}}',
-    type: 'asme', revision: 1, task_config: '{}', task_notify: '{}',
-    task_schedule_spec: JSON.stringify({ kind: 'cron', expr: '0 9 * * *', timezone: 'America/Los_Angeles' }),
-    timezone: 'America/Los_Angeles',
+  const at = nowSec() - 5;
+  const { task } = insertTask(ctx, {
+    type: 'asme', status: 'active', content: 'LA {{datetime}}',
+    scheduleSpec: { kind: 'one_shot', dateTime: at, timezone: 'America/Los_Angeles' },
+  });
+  ctx.db.prepare('UPDATE tasks SET status = ?, next_run_at = ? WHERE id = ?').run('active', at - 1, task.id);
+  let sent = null;
+  const original = providers.asme.run;
+  providers.asme.run = async ({ task: t, occurrence }) => {
+    // exactly what the real asme provider does with the joined task object
+    sent = renderContentVars(t, occurrence);
+    return { status: 'succeeded', summaryForOwner: 'ok', finalOutput: sent };
   };
-  // emulate taskFromJoin's mapping (exported behavior under test)
-  const task = {
-    id: row.task_id, title: row.title, content: row.content,
-    config: JSON.parse(row.task_config), notify: JSON.parse(row.task_notify),
-    scheduleSpec: JSON.parse(row.task_schedule_spec ?? row.schedule_spec),
-    timezone: row.timezone,
-  };
-  const at = 1794000000; // fixed instant
-  const sh = renderContentVars({ ...task, scheduleSpec: { timezone: 'Asia/Shanghai' }, timezone: 'Asia/Shanghai' }, { scheduled_for: at });
-  const la = renderContentVars(task, { scheduled_for: at });
-  assert.notEqual(sh, la, 'LA rendering must differ from Shanghai');
-  const laD = new Intl.DateTimeFormat('zh-CN', { timeZone: 'America/Los_Angeles', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(at * 1000));
-  assert.ok(la.includes(laD.replace(/\//g, '/')), `LA vars use the spec timezone: ${la}`);
+  try {
+    await ctx.runner.tick();
+    assert.ok(sent, 'provider ran');
+    const expected = new Intl.DateTimeFormat('zh-CN', { timeZone: 'America/Los_Angeles', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(at * 1000));
+    assert.ok(sent.includes(expected), `dispatched message renders in the LA spec timezone: "${sent}" (expected ${expected})`);
+    assert.ok(!sent.includes('undefined'), 'no undefined leaks from the join mapping');
+    const occ = ctx.db.prepare('SELECT * FROM occurrences WHERE task_id = ?').get(task.id);
+    assert.equal(occ.status, 'succeeded');
+  } finally {
+    providers.asme.run = original;
+  }
 });
 
 // group 2 (E-184 retest): deployment settings are not guest-writable
@@ -398,9 +406,15 @@ test('guest cannot PUT timeline settings (cooldown bypass / source rewrite block
   const guest = services.auth.createGuestUser();
   const gtoken = services.auth.issueToken(guest.id, 'test');
   const req = { headers: { authorization: `Bearer ${gtoken}` }, params: { key: 'timeline.sourceUrl' }, body: { value: 'http://evil.example/x' } };
-  await assert.rejects(async () => putRoute[1](req), /仅限已绑定邮箱|forbidden/i, 'guest PUT rejected');
+  await assert.rejects(async () => putRoute[1](req), /部署管理员|forbidden/i, 'guest PUT rejected');
   const req2 = { headers: { authorization: `Bearer ${gtoken}` }, params: { key: 'timeline.lastRefreshAt' }, body: { value: '0' } };
   await assert.rejects(async () => putRoute[1](req2), /内部冷却|forbidden/i, 'lastRefreshAt is never writable');
+  // binding an email is NOT admin rights: a regular bound account is rejected
+  // too unless it is on the deployment admin allowlist
+  const bound = services.auth.ensureUser('regular@example.com');
+  const btoken = services.auth.issueToken(bound.id, 'test');
+  const req3 = { headers: { authorization: `Bearer ${btoken}` }, params: { key: 'timeline.sourceUrl' }, body: { value: 'http://evil.example/x' } };
+  await assert.rejects(async () => putRoute[1](req3), /部署管理员|forbidden/i, 'non-admin bound account rejected');
 });
 
 // group 3 (E-184 retest): the source address never leaks through error paths
@@ -427,4 +441,96 @@ test('refresh errors and cached lastError never contain the source URL', async (
   const pr = await proj[1]({ headers: { authorization: `Bearer ${atoken}` }, params: { project: 'mThor' } });
   assert.ok(!JSON.stringify(pr).includes('heimdall-xmn02'), 'no source host in the cached project state');
   assert.ok(pr.lastError === null || String(pr.lastError).includes('[源地址已隐藏]') || !String(pr.lastError).includes('http'), `lastError sanitized: ${pr.lastError}`);
+});
+
+
+// BUG-60 (P1): timeline next_run_at is server-visible and the runner fires at it
+test('timeline task: schedulePreview sets next_run_at from the release cache; runner fires at that instant, exactly once', async () => {
+  const ctx = fresh();
+  // seed a release cache: FF today (in the future), plus one earlier milestone
+  const { wallToInstant } = await import('../src/time.js');
+  const now = nowSec();
+  const ffInstant = now + 90; // ~90s ahead — within the test's controlled clock
+  const ffWall = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(ffInstant * 1000)).replace(',', '');
+  const [y, mo, d, h, mi] = ffWall.split(/[-: ]/).map((x) => parseInt(x, 10));
+  const ffDate = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const atHHMM = `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
+  ctx.db.prepare('INSERT INTO timeline_cache (project, data, fetched_at, stale, last_error) VALUES (?,?,?,0,NULL)')
+    .run('mThor', JSON.stringify([{ release: '26.4.20', milestones: [{ name: 'FF', date: ffDate }] }]), now);
+
+  // a VERIFIED memory connection first — the task must be executable on creation
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)').run(
+    ctx.user.id, 'memory', JSON.stringify({ baseUrl: 'http://127.0.0.1:9/v', userKey: 'k' }), now);
+  // route through the real API surface: create → the route's schedulePreview
+  const { registerRoutes } = await import('../src/api.js');
+  const routes = [];
+  const app = { get: (p, h) => routes.push(['GET', p, h]), post: (p, h) => routes.push(['POST', p, h]), put: (p, h) => routes.push(['PUT', p, h]), patch(){}, delete(){} };
+  registerRoutes(app, { db: ctx.db, auth: ctx.auth, store: ctx.store, timeline: ctx.timeline, runner: ctx.runner, shares: ctx.shares, notify: ctx.notify, getConnections: ctx.getConnections });
+  const token = ctx.auth.issueToken(ctx.user.id, 'test');
+  const authHeaders = { authorization: `Bearer ${token}` };
+  const created = await routes.find(([m, p]) => m === 'POST' && p === '/api/v1/tasks')[2]({
+    headers: authHeaders,
+    body: { type: 'agent_task', title: 'tl fire probe', content: 'run', status: 'active',
+      scheduleSpec: { kind: 'timeline', project: 'mThor', milestone: 'FF', offsetDays: 0, time: atHHMM, timezone: 'Asia/Shanghai' },
+      config: { executor: 'memory', mode: 'read' }, notify: {}, idempotencyKey: 'tl-fire-1' },
+  });
+  const taskId = created.task.id;
+  const row = ctx.db.prepare('SELECT next_run_at, status FROM tasks WHERE id = ?').get(taskId);
+  assert.equal(row.status, 'active');
+  assert.ok(row.next_run_at && Math.abs(row.next_run_at - ffInstant) <= 60, `server-visible next_run_at ≈ FF instant (${row.next_run_at} vs ${ffInstant})`);
+
+  // controlled clock: advance past the instant and let the runner fire.
+  ctx.store.recomputeMissing(ctx.user.id, taskId);
+  const active = ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+  assert.equal(active.status, 'active', 'verified memory keeps the task executable');
+  const { providers } = await import('../src/providers.js');
+  const original = providers.agent_task.run;
+  let fired = 0;
+  providers.agent_task.run = async () => { fired += 1; return { status: 'succeeded', summaryForOwner: 'fired at the milestone' }; };
+  const realNow = Date.now;
+  try {
+    Date.now = () => (ffInstant + 30) * 1000; // controlled clock past the instant
+    await ctx.runner.tick();
+    assert.equal(fired, 1, 'runner fired exactly once at the computed instant');
+    const occ = ctx.db.prepare('SELECT * FROM occurrences WHERE task_id = ?').get(taskId);
+    assert.ok(occ, 'occurrence recorded');
+    assert.equal(Math.abs(occ.scheduled_for - ffInstant) <= 60, true, `occurrence scheduled_for = the server-visible time (${occ.scheduled_for})`);
+    await ctx.runner.tick(); // second tick at the same instant — no duplicate
+    assert.equal(fired, 1, 'occurrence key (release+milestone) prevents a second fire');
+  } finally {
+    Date.now = realNow;
+    providers.agent_task.run = original;
+  }
+});
+
+// BUG-59: connection verification state — saved ≠ verified; failed blocks missing computation
+test('PUT connection verifies server-side; a failed verification is recorded and reads as missing', async () => {
+  const ctx = fresh();
+  const { registerRoutes } = await import('../src/api.js');
+  const routes = [];
+  const app = { get: (p, h) => routes.push([p, h]), post: (p, h) => routes.push([p, h]), put: (p, h) => routes.push([p, h]), patch(){}, delete(){} };
+  registerRoutes(app, { db: ctx.db, auth: ctx.auth, store: ctx.store, timeline: ctx.timeline, runner: ctx.runner, shares: ctx.shares, notify: ctx.notify, getConnections: ctx.getConnections });
+  const token = ctx.auth.issueToken(ctx.user.id, 'test');
+  const authHeaders = { authorization: `Bearer ${token}` };
+  const put = routes.find(([p]) => p === '/api/v1/connections/{key}')[1];
+
+  // memory: health check against a dead port is deterministic — fails
+  const bad = await put({ headers: authHeaders, params: { key: 'memory' }, body: { value: { baseUrl: 'http://127.0.0.1:9/dead', userKey: 'k' } } });
+  assert.equal(bad.verification.state, 'failed', 'dead endpoint recorded as failed');
+  const badRow = ctx.db.prepare('SELECT verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'memory');
+  assert.equal(badRow.verified, -1);
+  assert.ok(badRow.verify_error, 'failure reason stored');
+
+  // a memory-executor task reads the failed connection as MISSING
+  const { task } = insertTask(ctx, { type: 'agent_task', status: 'draft', config: { executor: 'memory', mode: 'read' } });
+  ctx.db.prepare('UPDATE connections SET verified = 1, verify_error = NULL WHERE user_id = ? AND key = ?').run(
+    ctx.user.id, 'memory');
+  ctx.store.recomputeMissing(ctx.user.id, task.id);
+  const okState = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
+  assert.ok(!okState.missing.includes('connection:memory'), 'verified connection satisfies the requirement');
+  // now save a FAILED memory connection — the same task must read as missing again
+  await put({ headers: authHeaders, params: { key: 'memory' }, body: { value: { baseUrl: 'http://127.0.0.1:9/dead2', userKey: 'k' } } });
+  const failedState = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
+  assert.ok(failedState.missing.includes('connection:memory'), 'failed verification counts as missing — never silently executable');
+  assert.equal(failedState.status, 'draft', 'draft stays a draft');
 });

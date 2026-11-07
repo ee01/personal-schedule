@@ -119,7 +119,7 @@ function renderSidebar() {
   // 不再伪造状态点（详情见连接页）
   const cs = S.connStatus || {};
   const dots = [['ok','Runner'], [S.timeline.some(p=>p.configured)?'ok':'off','Timeline'],
-    [S.bots.configured?'ok':'off','Bot'], [cs.memory?'ok':'off','Memory Service'], [cs.multica?'ok':'off','Multica']];
+    [S.bots.configured?'ok':'off','Bot'], [connStateOf('memory'),'Memory Service'], [connStateOf('multica'),'Multica']];
   $('#connDots').innerHTML = dots.map(([k,l])=>`<span class="dot ${k}" title="${l}"></span>`).join('') + `<button class="btn ghost sm" data-nav="connections">详情</button>`;
   if (S.user.isGuest && countBy(()=>true) >= 1) {
     $('#sidebar').insertAdjacentHTML('beforeend', `<div class="side-note" data-menu="id-menu">绑定后可在其他设备找回 →</div>`);
@@ -699,13 +699,15 @@ function pageSetup() {
     ${items.map(card).join('') || '<div class="empty"><div class="e-t">全部就绪</div><button class="btn ghost" data-nav="tasks">返回任务</button></div>'}`;
 }
 function pageConnections() {
-  const card = (title, ok, statusHtml, bodyHtml) => `<div class="content-box"><div class="row"><b>${title}</b><span class="dot ${ok?'ok':'off'}"></span><span class="spacer"></span></div>${statusHtml}${bodyHtml}</div>`;
+  // BUG-59: the dot shows the VERIFICATION state — saved≠verified; a failed
+  // save is visibly red, never silently green
+  const card = (title, stateKey, statusHtml, bodyHtml = '') => `<div class="content-box"><div class="row"><b>${title}</b><span class="dot ${stateKey}"></span><span class="spacer"></span></div>${statusHtml}${bodyHtml}</div>`;
   $('#view').innerHTML = `<div class="page-h"><h2>连接与执行器</h2></div>` +
-    card('Schedule Service', true, '<div class="muted">Runner 在线 · 单一调度器 · 幂等与租约</div>', '') +
-    card('RingCentral 个人授权', !!getConnCache('rc_user'), connStatus('rc_user'), connForm('rc_user')) +
-    card('Bot 凭据', S.bots.configured, S.bots.configured ? `<div class="muted">已配置 ${S.bots.bots.length} 个 Bot</div>` : '<div class="muted">未配置</div>', connForm('rc_bot')) +
-    card('Memory Service', !!getConnCache('memory'), connStatus('memory'), connForm('memory')) +
-    card('Multica', !!getConnCache('multica'), connForm('multica')) +
+    card('Schedule Service', 'ok', '<div class="muted">Runner 在线 · 单一调度器 · 幂等与租约</div>') +
+    card('RingCentral 个人授权', connStateOf('rc_user'), connStatus('rc_user'), connForm('rc_user')) +
+    card('Bot 凭据', S.bots.configured ? 'ok' : connStateOf('rc_bot'), S.bots.configured ? `<div class="muted">已配置 ${S.bots.bots.length} 个 Bot</div>` : connStatus('rc_bot'), connForm('rc_bot')) +
+    card('Memory Service', connStateOf('memory'), connStatus('memory'), connForm('memory')) +
+    card('Multica', connStateOf('multica'), `${connStatus('multica')}<div style="margin-top:6px">${connForm('multica')}</div>`) +
     card('Timeline 数据源', S.timeline.some((p) => p.configured && !p.stale), `<div class="muted">${S.timeline.filter((p)=>p.configured).length}/${S.timeline.length} 个项目有数据</div>`,
       // BUG-58: per-project status — current release, refresh time, tasks in use
       `<div style="margin-top:8px">${S.timeline.map((p) => {
@@ -716,12 +718,29 @@ function pageConnections() {
     card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc(S.user.email)}</div>`, tokenMgmtHtml());
 }
 function getConnCache(k) { return (S.connStatus || {})[k] !== undefined ? S.connStatus[k] : null; }
+// BUG-59: "healthy" means VERIFIED, not merely saved
+const connVerified = (k) => connStateOf(k) === 'ok';
 async function loadConnStatus() {
+  // BUG-59: presence is not health — keep the verification state:
+  // 0 saved/unverified, 1 verified, -1 failed
   const r = await api('/connections'); const out = {};
-  for (const [k, v] of Object.entries(r.body || {})) out[k] = Boolean(v && (v.baseUrl || v.token || v.clientId || v.webhookUrl));
+  for (const [k, v] of Object.entries(r.body || {})) out[k] = { saved: Boolean(v && (v.baseUrl || v.token || v.clientId || v.webhookUrl)), verified: v?.verified ?? 0, verifyError: v?.verifyError || null };
   S.connStatus = out;
 }
-function connStatus(k) { return S.connStatus?.[k] ? '<span class="ok-chip">已连接</span>' : '<span class="chip">未配置</span>'; }
+const connStateOf = (k) => {
+  const c = (S.connStatus || {})[k];
+  if (!c || !c.saved) return 'off';
+  if (c.verified === 1) return 'ok';
+  if (c.verified === -1) return 'err';
+  return 'unverified';
+};
+function connStatus(k) {
+  const c = (S.connStatus || {})[k];
+  if (!c || !c.saved) return '<span class="chip">未配置</span>';
+  if (c.verified === 1) return '<span class="ok-chip">已连接（验证成功）</span>';
+  if (c.verified === -1) return `<span class="chip" style="color:var(--err)">验证失败${c.verifyError ? '：' + esc(String(c.verifyError).slice(0, 60)) : ''}</span>`;
+  return '<span class="chip">已保存（未验证）</span>';
+}
 function connForm(k) { return `<button class="btn ghost sm" data-cfg="${k}">连接 / 编辑</button>`; }
 function tokenMgmtHtml() {
   return `<div class="row" style="margin-top:8px"><button class="btn primary sm" id="tkNew">＋ 新建登录令牌</button><span class="mono" id="tkOut"></span></div>
@@ -825,6 +844,9 @@ function wire() {
     else if (d.startsWith('tasks/tag:') || d === 'tasks/ungrouped') S.groupMode = 'tag';
     nav(d);
   });
+  // BUG-50: nav buttons rendered inside the view (setup cards, empty states)
+  // were dead clicks — the old binding only covered the sidebar
+  $$('#view [data-nav]').forEach((a) => a.onclick = () => nav(a.dataset.nav));
   $('#btnNew').onclick = () => newFlow(null);
   const b2 = $('#btnNew2'); if (b2) b2.onclick = () => newFlow(null);
   $$('#view [data-open], #view .task-row').forEach((el) => el.onclick = () => openDrawer(el.dataset.open));
@@ -1379,11 +1401,20 @@ function openConnDlg(key, returnTo) {
     <div class="mcontent">${fields.map((f)=>`<div class="field"><label>${esc(f)}</label><input class="input" id="cfg-${esc(f)}" ${f.toLowerCase().includes('key')||f.toLowerCase().includes('secret')||f==='token'?'type=password':''}></div>`).join('')}</div>
     <div class="mfoot"><span class="muted" id="cfgMsg"></span><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn primary" data-act="dlgOk" data-test="1">保存并测试</button></div></div>`,
     onOk: async () => { const value = {}; fields.forEach((f)=>{ value[f] = $('#cfg-'+f).value.trim(); });
+      // BUG-59: PUT saves AND verifies server-side; the outcome is explicit —
+      // a failed verification keeps this dialog open with the reason, never
+      // closes silently and never shows a healthy green state
       const r = await api(`/connections/${key}`, { method: 'PUT', body: { value } });
-      const t = await api(`/connections/${key}/test`, { method: 'POST', body: { value } });
       const msg = $('#cfgMsg'); if (!msg) return false;
-      if (r.status === 200 && t.body.ok) { msg.textContent = '连接成功'; await loadConnStatus(); await refresh(); if (returnTo === 3) { DLG=null; renderModal(); renderCfPane(); toast('Bot 已配置，已自动选中'); return false; } toast('已连接'); return true; }
-      msg.textContent = '失败：' + (t.body.error || r.body.error || '请检查字段'); return false; } };
+      const v = r.body?.verification;
+      if (r.status === 200 && v?.state === 'ok') {
+        msg.textContent = '验证成功，已保存'; await loadConnStatus(); await refresh();
+        if (returnTo === 3) { DLG=null; renderModal(); renderCfPane(); toast('Bot 已配置，已自动选中'); return false; }
+        render(); toast('已连接（验证成功）', { kind: 'ok' }); return true;
+      }
+      msg.textContent = '验证失败（已保存但不可用）：' + (v?.error || r.body?.error || '请检查字段');
+      await loadConnStatus(); render();
+      return false; } };
   renderModal();
 }
 

@@ -578,7 +578,7 @@ mark.sens{background:rgba(242,178,76,.18);color:var(--warn);border-radius:3px;pa
 .side-foot{margin-top:auto;padding-top:var(--s4);border-top:1px solid var(--line)}
 .runner-pill{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:var(--fs-xs)} .runner-pill .dot{background:var(--ok)}
 .conn-dots{display:flex;align-items:center;gap:6px;margin-top:var(--s2)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--text-4)} .dot.ok{background:var(--ok)} .dot.off{background:var(--text-4)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text-4)} .dot.ok{background:var(--ok)} .dot.off{background:var(--text-4)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)} .dot.unverified{background:var(--warn)}
 .setup-card{position:relative} .setup-items{margin-top:6px}
 .chips-input{display:flex;flex-wrap:wrap;gap:6px;border:1px solid var(--line-2);border-radius:var(--r-md);padding:6px 10px;background:var(--surface)}
 .chips-input .chip{display:inline-flex;align-items:center;gap:6px}
@@ -620,7 +620,7 @@ mark.sens{background:rgba(242,178,76,.18);color:var(--warn);border-radius:3px;pa
 .side-foot{margin-top:auto;padding-top:var(--s4);border-top:1px solid var(--line)}
 .runner-pill{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:var(--fs-xs)} .runner-pill .dot{background:var(--ok)}
 .conn-dots{display:flex;align-items:center;gap:6px;margin-top:var(--s2)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--text-4)} .dot.ok{background:var(--ok)} .dot.off{background:var(--text-4)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text-4)} .dot.ok{background:var(--ok)} .dot.off{background:var(--text-4)} .dot.err{background:var(--err)} .dot.warn{background:var(--warn)} .dot.unverified{background:var(--warn)}
 .setup-card{position:relative} .setup-items{margin-top:6px}
 .chips-input{display:flex;flex-wrap:wrap;gap:6px;border:1px solid var(--line-2);border-radius:var(--r-md);padding:6px 10px;background:var(--surface)}
 .chips-input .chip{display:inline-flex;align-items:center;gap:6px}
@@ -802,7 +802,12 @@ document.addEventListener('click', (e)=>{
   if(MENU){ const item=e.target.closest && e.target.closest('.m-item');
     if(item && MENU.el.contains(item)){ const ds=item.dataset; const key=Object.keys(ds)[0];
       if(key){ const ob=MENU.onClick, an=MENU.anchor; closeMenu(); if(ob) ob(key, ds[key]); return; } } }
-  if(MENU && !MENU.el.contains(e.target) && !e.target.closest('[data-menu]') && !(MENU.anchor && (MENU.anchor === e.target || MENU.anchor.contains(e.target)))) closeMenu(); if(DLG && e.target.dataset?.act==='dlgClose') { DLG=null; renderModal(); } if(DLG && e.target.dataset?.act==='dlgOk'){ const keep=DLG.onOk(); if(keep!==false){DLG=null;renderModal();} } });
+  if(MENU && !MENU.el.contains(e.target) && !e.target.closest('[data-menu]') && !(MENU.anchor && (MENU.anchor === e.target || MENU.anchor.contains(e.target)))) closeMenu(); if(DLG && e.target.dataset?.act==='dlgClose') { DLG=null; renderModal(); } if(DLG && e.target.dataset?.act==='dlgOk'){ const keep=DLG.onOk();
+    // BUG-59: async onOk returns a PROMISE — the old code treated it as
+    // truthy and closed the dialog before validation/verification finished
+    // (silent close, lost input). Await it: close only on an explicit non-false.
+    if(keep && typeof keep.then==='function'){ keep.then((k)=>{ if(k!==false){DLG=null;renderModal();} }).catch(()=>{}); }
+    else if(keep!==false){DLG=null;renderModal();} } });
 </script>
 <script src="/app/app.js"></script>
 </body>

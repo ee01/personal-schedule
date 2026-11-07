@@ -2,6 +2,7 @@
 // preview), BUG-06 (draft preservation), BUG-24 (executor area). Official
 // page, no injection. Requires local server on :4557.
 import { chromium } from '/Users/Esone/.npm/_npx/9833c18b2d85bc59/node_modules/playwright/index.mjs';
+import { startStub } from './lib/stub-server.mjs';
 const EXE = '/Users/Esone/Library/Caches/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-mac-arm64/chrome-headless-shell';
 const BASE = 'http://127.0.0.1:4557';
 const browser = await chromium.launch({ executablePath: EXE, timeout: 15000 });
@@ -20,6 +21,7 @@ const toasts = async () => page.$$eval('.toast', (els) => els.map((e) => e.textC
 
 await page.goto(BASE + '/app', { waitUntil: 'domcontentloaded', timeout: 15000 });
 await sleep(2500);
+const stub = await startStub();
 const posts = []; page.on('request', (r) => { if (r.method() === 'POST' && r.url().includes('/api/v1/tasks')) posts.push(r.url()); });
 
 async function startAsme(title) {
@@ -112,7 +114,7 @@ check('BUG-06b', ag2?.status === 'draft' && ag2.title.endsWith('-改'), `after e
 await page.keyboard.press('Escape'); await sleep(300);
 
 // ---------- BUG-03: monthly preview shows the next run ----------
-await api('/connections/memory', 'PUT', { value: { baseUrl: 'http://127.0.0.1:9/v', userKey: 'probe-key' } });
+await api('/connections/memory', 'PUT', { value: { baseUrl: stub.url, userKey: 'probe-key' } }); // stub passes verification (BUG-59)
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500);
 await page.click('#btnNew'); await sleep(250);
 await page.click('#cfPane [data-pick="agent_task"]'); await sleep(250);
