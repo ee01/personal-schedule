@@ -282,3 +282,11 @@
 - 新回归：guest+普通绑定账户读遮蔽/写拒绝/配置未被改动；白名单管理员可读写（84/84）。
 - **线上实测**：guest PUT 403（部署管理员）/ lastRefreshAt 403 / GET 遮蔽 / timeline 读取 200；E 管理令牌 GET 显示真实 URL、同值回写 200 且值不变、lastRefreshAt 同样 403。
 - 部署：`api.js` md5 与提交一致（f9228a7d…）；静态指纹同上轮（本轮纯服务端）。
+
+## 2026-11-07 · 第 11 轮：旧源遮蔽轮换安全 + 时区一致渲染（84/84，已部署）
+
+- **旧源泄露（3 断言）**：`redactSource` 不再依赖当前模板——timeline 错误串中的**任意 http(s) URL** 一律遮蔽，覆盖配置轮换前旧主机的缓存错误。回归：旧主机 lastError 经 `/timeline/projects` 遮蔽 + 任意时代 URL 直接验证。
+- **时区一致性（BUG-61）**，三个根因：① cfStep4 用 `z.id/z.label` 渲染嵌套数组形式的 TIMEZONES——第 4 轮起每个时区选项的 value 字面为 "undefined"，用户选择即存入字符串 'undefined'；已改为解构。② `specFromTime` 的 `+hh || 9` 吞掉合法 0 点（00:24 → 9:24），`timeFromSpec` cron 还原同病；均改为显式解析。③ `fmtNext`/`fmtNextText`/`fmtDT` 增加规格时区参数（`fmtWall`，Intl，缺省回落浏览器时区）——预览、列表行、一次性规则文案、抽屉后续运行、完成页全部按时区渲染，值与标签一致。
+- **探针 r11**（上海浏览器 + UTC 00:24 任务）：预览/确认/列表/抽屉/完成页全部显示 00:24（UTC 标签）；服务器排程 2026-11-08T00:24Z；步骤 4 无 undefined；线上项目状态无任何 URL。
+- 84/84 单测；r5 13/13、r6 9/9、r7 28/28、r10 10/10、r11 11/11、ui16 30/30、启动冒烟 0 错误。
+- **部署指纹**：`/app`=`8e74a1e4…`、`/app/app.js`=`ae46881d…`、`/share/index.html`=`0d84109a…`；服务端 timeline.js/api.js md5 与提交一致。
