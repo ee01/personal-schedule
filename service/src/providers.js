@@ -67,9 +67,18 @@ async function rcAccessToken(connection) {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: 'grant_type=client_credentials',
+      // BUG-61 remainder: the bot OAuth token exchange is an RC request too —
+      // it must refuse redirects exactly like the httpJson helper. A 302 used
+      // to be followed: same-origin path redirects carried the Basic header to
+      // the second path and verification still succeeded.
+      redirect: 'error',
     });
     if (!response.ok) throw new Error(`rc bot auth failed (${response.status})`);
     const payload = await response.json();
+    if (!payload || typeof payload.access_token !== 'string') {
+      // a bare 200 is not a token grant — shape-check like the whoami path
+      throw new Error('rc bot auth response malformed (no access_token)');
+    }
     return payload.access_token;
   }
   // user JWT (AsMe): provided by the user's RC authorization

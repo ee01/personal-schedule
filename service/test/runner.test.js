@@ -687,3 +687,88 @@ test('PUT /connections rejects an untrusted RC serverUrl before saving', async (
   const stored = ctx.db.prepare('SELECT COUNT(*) n FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'rc_user');
   assert.equal(stored.n, 0, 'nothing stored for an untrusted target');
 });
+
+
+// BUG-61 remainder: the bot OAuth token exchange must also refuse redirects —
+// same-origin path hops used to carry the Basic header to the second path and
+// still verify ok; cross-origin 302s were followed too
+test('bot OAuth token exchange refuses same-origin and cross-origin redirects', async () => {
+  const { rcWhoAmI } = await import('../src/providers.js');
+  const { config } = await import('../src/config.js');
+  const http = await import('node:http');
+
+  const mkStub = (handler) => new Promise((resolve) => {
+    const srv = http.createServer(handler);
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+
+  // same-origin redirect to a different path (the dangerous branch: Basic
+  // header survives the hop and the second path answers with a token)
+  const sameOrigin = await mkStub((rq, rs) => {
+    if (rq.url.startsWith('/restapi/v1.0/oauth/token')) {
+      rs.writeHead(302, { Location: 'http://127.0.0.1:' + rq.headers.host.split(':')[1] + '/evil-path' });
+      rs.end();
+      return;
+    }
+    if (rq.url === '/evil-path') {
+      // the second path received the request — if Authorization arrived, the
+      // header crossed the hop (the old bug); answer with a controlled token
+      const gotAuth = Boolean(rq.headers.authorization);
+      rs.writeHead(200, { 'Content-Type': 'application/json' });
+      rs.end(JSON.stringify({ access_token: 'controlled-' + (gotAuth ? 'with-auth' : 'no-auth') }));
+      return;
+    }
+    rs.writeHead(404); rs.end('{}');
+  });
+  // cross-origin redirect target
+  const crossTarget = await mkStub((rq, rs) => {
+    rs.writeHead(200, { 'Content-Type': 'application/json' });
+    rs.end(JSON.stringify({ access_token: 'cross-origin-controlled' }));
+  });
+  const redirector = await mkStub((rq, rs) => {
+    rs.writeHead(302, { Location: `http://127.0.0.1:${crossTarget.address().port}/x` });
+    rs.end();
+  });
+
+  config.rcTestOrigins = [`http://127.0.0.1:${sameOrigin.address().port}`, `http://127.0.0.1:${redirector.address().port}`];
+  try {
+    // same-origin path redirect: the exchange must FAIL, not follow
+    await assert.rejects(
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${sameOrigin.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
+      /bot auth|redirect|failed/i,
+      'same-origin redirect on the token endpoint must refuse, not follow',
+    );
+    // cross-origin redirect: refused as well
+    await assert.rejects(
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${redirector.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
+      /bot auth|redirect|failed/i,
+      'cross-origin redirect on the token endpoint must refuse',
+    );
+  } finally {
+    config.rcTestOrigins = [];
+    for (const srv of [sameOrigin, crossTarget, redirector]) { srv.closeAllConnections?.(); await new Promise((r) => srv.close(r)); }
+  }
+});
+
+// bot token exchange: a 200 without an access_token is not a grant
+test('bot OAuth token exchange validates the payload shape', async () => {
+  const { rcWhoAmI } = await import('../src/providers.js');
+  const { config } = await import('../src/config.js');
+  const http = await import('node:http');
+  const junk = await new Promise((resolve) => {
+    const srv = http.createServer((rq, rs) => { rs.writeHead(200, { 'Content-Type': 'application/json' }); rs.end('{}'); });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  config.rcTestOrigins = [`http://127.0.0.1:${junk.address().port}`];
+  try {
+    await assert.rejects(
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${junk.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
+      /malformed|no access_token|bot auth/i,
+      'bare 200 without access_token is not a token grant',
+    );
+  } finally {
+    config.rcTestOrigins = [];
+    junk.closeAllConnections?.();
+    await new Promise((r) => junk.close(r));
+  }
+});
