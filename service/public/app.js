@@ -12,6 +12,21 @@ function route() {
 function nav(view, sub) { location.hash = `#/${view}${sub ? '/' + sub : ''}`; }
 window.addEventListener('hashchange', route);
 
+/* 窄屏侧栏（E-194 反馈）：拉出后可关闭 —— 遮罩点击 / 面板内关闭按钮 /
+   Esc / 导航跳转均收起。此前只有 body.side-open（无任何 CSS 规则）且侧栏
+   盖住了汉堡按钮，拉出后永远无法关闭 */
+function sideOpen() { const sb = $('#sidebar'); if (sb) sb.classList.add('open'); document.body.classList.add('side-open'); }
+function sideClose() { const sb = $('#sidebar'); if (sb) sb.classList.remove('open'); document.body.classList.remove('side-open'); }
+function ensureSideScrim() {
+  if ($('#sideScrim')) return;
+  const scrim = document.createElement('div');
+  scrim.id = 'sideScrim';
+  scrim.addEventListener('click', sideClose);
+  // mount INSIDE #app: .app is a stacking context (z-index:1), so a body-level
+  // scrim would paint above the sidebar itself and swallow its clicks
+  $('#app').appendChild(scrim);
+}
+
 function skeleton() {
   $('#view').innerHTML = '<div class="skel" style="height:84px;margin-bottom:8px"></div>'.repeat(4);
 }
@@ -68,7 +83,8 @@ function renderCrumb() {
   $('#menuToggle').style.display = '';
   const mt = $('#menuToggle');
   if (mt && !mt.innerHTML.trim()) mt.innerHTML = ic('menu');
-  if (mt) mt.onclick = () => { $('#sidebar').classList.toggle('open'); document.body.classList.toggle('side-open'); };
+  ensureSideScrim();
+  if (mt) mt.onclick = () => { if ($('#sidebar').classList.contains('open')) sideClose(); else sideOpen(); };
 }
 
 /* ========================================================= 侧栏（N1–N7, A1） */
@@ -85,7 +101,7 @@ function renderSidebar() {
   // in Tags or 未分组
   const typeMode = typePart != null || S.groupMode === 'type';
   $('#sidebar').innerHTML = `
-  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div></div>
+  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div><button class="btn ghost icon side-close" id="sideClose" aria-label="关闭导航">${ic('close')}</button></div>
   <button class="btn primary btn-new" id="btnNew">新建计划任务 <kbd>N</kbd></button>
   <nav>
     <a class="nav-item ${S.view==='tasks'&&S.sub!=='archived'?'active':''}" data-nav="tasks" aria-current="${S.view==='tasks'?'page':'false'}"><span data-icon="tasks"></span>全部任务<span class="count">${countBy(()=>true)}</span></a>
@@ -855,7 +871,10 @@ function wire() {
     if (d.startsWith('tasks/type:')) S.groupMode = 'type';
     else if (d.startsWith('tasks/tag:') || d === 'tasks/ungrouped') S.groupMode = 'tag';
     nav(d);
+    // 窄屏：导航后收起侧栏，避免面板继续盖住内容
+    if (window.innerWidth <= 860) sideClose();
   });
+  const scBtn = $('#sideClose'); if (scBtn) scBtn.onclick = sideClose;
   // BUG-50: nav buttons rendered inside the view (setup cards, empty states)
   // were dead clicks — the old binding only covered the sidebar
   $$('#view [data-nav]').forEach((a) => a.onclick = () => nav(a.dataset.nav));
@@ -904,15 +923,15 @@ function wire() {
   $$('#sidebar [data-menu="id-menu"]').forEach((b) => b.onclick = () => openMenu(b, `
     <button class="m-item" data-idact="bind-email">绑定邮箱</button>
     <button class="m-item" data-idact="bind-ext">绑定 Personal AI 扩展</button>
-    <button class="m-item" data-idact="logout">${S.user.isGuest ? '在这台设备登录已有账号' : '退出登录'}</button>`, (act, arg) => {
+    ${S.user.isGuest ? '' : '<button class="m-item" data-idact="logout">退出登录</button>'}`, (act, arg) => {
       if (act !== 'idact') return;
-      // E-194: for a single-device session, "在这台设备登录已有账号" opens the
-      // email login dialog (merge into the existing account) — it must NOT
-      // log out, which would just re-create a fresh guest on reload
-      if (arg === 'bind-email') openAuthDrawer(true);
-      if (arg === 'logout' && S.user.isGuest) openAuthDrawer(false);
+      // E-194 修订：不设独立的「在这台设备登录已有账号」入口——绑定邮箱
+      // 或扩展 PAT 登录时，由服务端智能判断是否合并本机数据、删除单设备
+      // 账号。单设备会话也不提供「退出」：退出只会丢掉本机数据的访问，
+      // 绑定才是把身份持久化的路径。
+      if (arg === 'bind-email') openAuthDrawer();
       if (arg === 'bind-ext') { toast('扩展登录桥待受信 HTTPS 就绪后开放（当前可绑定邮箱恢复身份）', { kind: 'warn' }); }
-      if (arg === 'logout' && !S.user.isGuest) { api('/auth/logout', { method: 'POST' }); location.reload(); }
+      if (arg === 'logout') { api('/auth/logout', { method: 'POST', body: '{}' }); location.reload(); }
     }));
   const sr = $('#search'); if (sr) { sr.oninput = (e) => { S.q = e.target.value; render(); $('#search').focus(); $('#search').value = e.target.value; }; }
   wireDrawer(); wireCf(); wireSharePage(); wireSetup();
@@ -1010,16 +1029,15 @@ function mergeTagDlg(from) {
     } };
   renderModal();
 }
-function openAuthDrawer(bindEmail) {
-  // guest identity: "绑定邮箱" binds a FRESH email (in-place upgrade), while
-  // "在这台设备登录已有账号" is the cross-device login into an EXISTING
-  // account. Both submit the same email-code verify; the server decides:
-  // fresh email → in-place upgrade, existing account → login + merge of this
-  // device's single-device data (E-194).
-  const loginMode = !bindEmail;
-  DLG = { stage: 'email', email: '', html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>${loginMode ? '登录已有账号' : '绑定邮箱'}</h3></div>
+function openAuthDrawer() {
+  // 单设备身份的统一入口（E-194 修订）：只留「绑定邮箱」，不再有独立的
+  // 「在这台设备登录已有账号」按钮。服务端按邮箱智能判断：新邮箱 → 原位
+  // 绑定本机账号（userId 不变）；邮箱已属于已有账号 → 登录该账号并自动
+  // 合并本机单设备数据、删除单设备账号。Chrome 扩展 PAT 登录（登录桥 /
+  // /auth/login）同样由服务端完成同一套合并判断。
+  DLG = { stage: 'email', email: '', html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>绑定邮箱</h3></div>
     <div class="mcontent">
-      <div class="alert info">${loginMode ? '输入已绑定该账号的邮箱并完成验证码验证。本机单设备模式下已创建的任务、Tag、分享会自动合并进该账号，合并后单设备账号删除。' : '绑定后可在其他设备找回这个账号；任务、运行记录与已配置的连接全部保留。若该邮箱已属于已有账号，则会登录该账号并自动合并本机数据。'}</div>
+      <div class="alert info">绑定后可在其他设备找回这个账号；任务、运行记录与已配置的连接全部保留。若该邮箱已属于已有账号，将登录该账号并把本机单设备数据自动合并进去（已有账号的连接凭据不会被覆盖）。</div>
       ${DLG.stage === 'email' ? `<div class="field"><label for="authEmail">邮箱</label><input class="input" id="authEmail" type="email" placeholder="you@ringcentral.com" value="${esc(DLG.email)}"></div>` :
         `<div class="field"><span class="label">已发送验证码到 ${esc(DLG.email)}</span><input class="input mono" id="authCode" placeholder="6 位验证码" maxlength="6" inputmode="numeric"></div><div class="muted">验证码一次性使用；错误 5 次后作废。</div>`}
       <div class="muted" id="authMsg" style="margin-top:6px"></div></div>
@@ -1470,7 +1488,8 @@ function onKey(e) {
     if (DETAIL) { closeDrawer(); return; }
     if (MENU) closeMenu();
     const help = $('#helpOverlay'); if (help) help.remove();
-    const mt = $('#menuToggle'); if (mt && window.innerWidth <= 860) { document.body.classList.remove('side-open'); }
+    // 窄屏：Esc 也收起侧栏（此前只移除了无规则的 side-open，面板仍开）
+    if (window.innerWidth <= 860) sideClose();
     return;
   }
   // BUG-25: 1–5 choose a TYPE on step 1 only (prototype behavior); they are

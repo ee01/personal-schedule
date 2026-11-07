@@ -478,6 +478,9 @@ mark.sens{background:rgba(242,178,76,.18);color:var(--warn);border-radius:3px;pa
 @media (max-width:1100px){.trow{grid-template-columns:28px minmax(0,1fr) 150px 112px 120px}.trow .tags{display:none}}
 @media (max-width:860px){
   body{overflow:auto}
+  body.side-open{overflow:hidden}
+  body.side-open #sideScrim{display:block;position:fixed;inset:0;z-index:44;background:rgba(5,6,8,.55);backdrop-filter:blur(2px)}
+  .sidebar .side-close{display:inline-flex;margin-left:auto}
   .app{grid-template-columns:1fr;height:auto;min-height:100dvh}
   .sidebar{position:fixed;inset:0 auto 0 0;width:280px;z-index:45;transform:translateX(-100%);transition:transform var(--d3) var(--ease)}
   .sidebar.open{transform:none;box-shadow:var(--shadow-pop)}
@@ -512,6 +515,8 @@ mark.sens{background:rgba(242,178,76,.18);color:var(--warn);border-radius:3px;pa
   .setup-body{padding-left:16px}
 }
 .menu-toggle,.mobile-steps{display:none}
+#sideScrim{display:none}
+.side-close{display:none}
 .side-scroll .row .btn.icon{opacity:0;transition:opacity var(--d1)}
 .side-scroll .row:hover .btn.icon,.side-scroll .row .btn.icon:focus-visible{opacity:1}
 @media (hover:none){.side-scroll .row .btn.icon{opacity:1}}
