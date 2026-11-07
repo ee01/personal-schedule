@@ -1,4 +1,6 @@
 import test from 'node:test';
+const dbSet = (db, sql) => db.prepare(sql).run();
+const dbGet = (db, sql) => db.prepare(sql).get();
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { openDb } from '../src/db.js';
@@ -533,4 +535,52 @@ test('PUT connection verifies server-side; a failed verification is recorded and
   const failedState = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
   assert.ok(failedState.missing.includes('connection:memory'), 'failed verification counts as missing — never silently executable');
   assert.equal(failedState.status, 'draft', 'draft stays a draft');
+});
+
+
+// settings read/write boundary: deployment config is ADMIN-ONLY in both
+// directions — binding an email is not admin rights (Sol/coordinator finding)
+test('timeline settings are admin-only: regular bound accounts cannot read the source URL or write any timeline.* key', async () => {
+  const ctx = fresh();
+  const { registerRoutes } = await import('../src/api.js');
+  const routes = [];
+  const app = { get: (p, h) => routes.push(['GET', p, h]), post: (p, h) => routes.push(['POST', p, h]), put: (p, h) => routes.push(['PUT', p, h]), patch(){}, delete(){} };
+  registerRoutes(app, { db: ctx.db, auth: ctx.auth, store: ctx.store, timeline: ctx.timeline, runner: ctx.runner, shares: ctx.shares, notify: ctx.notify, getConnections: ctx.getConnections });
+  ctx.db.prepare("INSERT INTO settings (key, value) VALUES ('timeline.sourceUrl', 'http://internal.example/api/release')").run();
+
+  const bound = ctx.auth.ensureUser('regular@example.com');
+  const guest = ctx.auth.createGuestUser();
+  const bTok = ctx.auth.issueToken(bound.id, 't');
+  const gTok = ctx.auth.issueToken(guest.id, 't');
+  const getSettings = routes.find(([m, p]) => m === 'GET' && p === '/api/v1/settings')[2];
+  const putSettings = routes.find(([m, p]) => m === 'PUT' && p === '/api/v1/settings/{key}')[2];
+
+  // READ: both guest and regular bound accounts see the redacted marker
+  const gOut = await getSettings({ headers: { authorization: `Bearer ${gTok}` } });
+  const bOut = await getSettings({ headers: { authorization: `Bearer ${bTok}` } });
+  assert.equal(gOut['timeline.sourceUrl'], '(deployment admins only)', 'guest sees redacted source URL');
+  assert.equal(bOut['timeline.sourceUrl'], '(deployment admins only)', 'regular bound account sees redacted source URL');
+
+  // WRITE: both are rejected for every timeline.* key
+  for (const tok of [gTok, bTok]) {
+    await assert.rejects(async () => putSettings({ headers: { authorization: `Bearer ${tok}` }, params: { key: 'timeline.sourceUrl' }, body: { value: 'http://evil.example/x' } }), /部署管理员|forbidden/i, 'write rejected for non-admin');
+    await assert.rejects(async () => putSettings({ headers: { authorization: `Bearer ${tok}` }, params: { key: 'timeline.lastRefreshAt' }, body: { value: '0' } }), /内部冷却|forbidden/i, 'lastRefreshAt never client-writable');
+  }
+  // the stored value is untouched
+  const stored = ctx.db.prepare("SELECT value FROM settings WHERE key = 'timeline.sourceUrl'").get();
+  assert.equal(stored.value, 'http://internal.example/api/release', 'deployment config unchanged by rejected writes');
+
+  // an ADMIN (SCHEDULE_ADMIN_EMAILS) can read and write
+  const { config } = await import('../src/config.js');
+  config.adminEmails = ['admin@example.com'];
+  try {
+    const admin = ctx.auth.ensureUser('admin@example.com');
+    const aTok = ctx.auth.issueToken(admin.id, 't');
+    const aOut = await getSettings({ headers: { authorization: `Bearer ${aTok}` } });
+    assert.equal(aOut['timeline.sourceUrl'], 'http://internal.example/api/release', 'admin reads the real URL');
+    const w = await putSettings({ headers: { authorization: `Bearer ${aTok}` }, params: { key: 'timeline.graceHours' }, body: { value: '6' } });
+    assert.equal(w.ok, true, 'admin can write deployment settings');
+  } finally {
+    config.adminEmails = [];
+  }
 });

@@ -794,10 +794,12 @@ function describeRole(type, cfg) {
     const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'timeline.%'").all();
     const out = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     // security boundary: deployment-level config (the internal release-info
-    // URL) is not exposed to unbound guest identities — they can still use
-    // the timeline data itself via /timeline/projects
-    if (user.is_guest === 1 && out['timeline.sourceUrl'] !== undefined) {
-      out['timeline.sourceUrl'] = '(bound accounts only)';
+    // URL) is admin-only — binding an email proves identity, not admin
+    // rights. Guests AND regular bound accounts see the redacted marker;
+    // everyone keeps full access to the timeline data via /timeline/projects
+    const isAdmin = config.adminEmails.includes(String(user.email || '').toLowerCase());
+    if (!isAdmin && out['timeline.sourceUrl'] !== undefined) {
+      out['timeline.sourceUrl'] = '(deployment admins only)';
     }
     return out;
   });
