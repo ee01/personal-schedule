@@ -906,9 +906,13 @@ function wire() {
     <button class="m-item" data-idact="bind-ext">绑定 Personal AI 扩展</button>
     <button class="m-item" data-idact="logout">${S.user.isGuest ? '在这台设备登录已有账号' : '退出登录'}</button>`, (act, arg) => {
       if (act !== 'idact') return;
-      if (arg === 'bind-email' || arg === 'logout') openAuthDrawer(arg === 'bind-email');
+      // E-194: for a single-device session, "在这台设备登录已有账号" opens the
+      // email login dialog (merge into the existing account) — it must NOT
+      // log out, which would just re-create a fresh guest on reload
+      if (arg === 'bind-email') openAuthDrawer(true);
+      if (arg === 'logout' && S.user.isGuest) openAuthDrawer(false);
       if (arg === 'bind-ext') { toast('扩展登录桥待受信 HTTPS 就绪后开放（当前可绑定邮箱恢复身份）', { kind: 'warn' }); }
-      if (arg === 'logout') { api('/auth/logout', { method: 'POST' }); location.reload(); }
+      if (arg === 'logout' && !S.user.isGuest) { api('/auth/logout', { method: 'POST' }); location.reload(); }
     }));
   const sr = $('#search'); if (sr) { sr.oninput = (e) => { S.q = e.target.value; render(); $('#search').focus(); $('#search').value = e.target.value; }; }
   wireDrawer(); wireCf(); wireSharePage(); wireSetup();
@@ -1007,12 +1011,15 @@ function mergeTagDlg(from) {
   renderModal();
 }
 function openAuthDrawer(bindEmail) {
-  if (!bindEmail) return;
-  // single-device email binding: request a one-time code, then verify — the
-  // account upgrades in place (same userId, tasks/connections preserved)
-  DLG = { stage: 'email', email: '', html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>${S.user.isGuest ? '绑定邮箱' : '更换绑定邮箱'}</h3></div>
+  // guest identity: "绑定邮箱" binds a FRESH email (in-place upgrade), while
+  // "在这台设备登录已有账号" is the cross-device login into an EXISTING
+  // account. Both submit the same email-code verify; the server decides:
+  // fresh email → in-place upgrade, existing account → login + merge of this
+  // device's single-device data (E-194).
+  const loginMode = !bindEmail;
+  DLG = { stage: 'email', email: '', html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>${loginMode ? '登录已有账号' : '绑定邮箱'}</h3></div>
     <div class="mcontent">
-      <div class="alert info">绑定后可在其他设备找回这个账号；任务、运行记录与已配置的连接全部保留。</div>
+      <div class="alert info">${loginMode ? '输入已绑定该账号的邮箱并完成验证码验证。本机单设备模式下已创建的任务、Tag、分享会自动合并进该账号，合并后单设备账号删除。' : '绑定后可在其他设备找回这个账号；任务、运行记录与已配置的连接全部保留。若该邮箱已属于已有账号，则会登录该账号并自动合并本机数据。'}</div>
       ${DLG.stage === 'email' ? `<div class="field"><label for="authEmail">邮箱</label><input class="input" id="authEmail" type="email" placeholder="you@ringcentral.com" value="${esc(DLG.email)}"></div>` :
         `<div class="field"><span class="label">已发送验证码到 ${esc(DLG.email)}</span><input class="input mono" id="authCode" placeholder="6 位验证码" maxlength="6" inputmode="numeric"></div><div class="muted">验证码一次性使用；错误 5 次后作废。</div>`}
       <div class="muted" id="authMsg" style="margin-top:6px"></div></div>
@@ -1030,7 +1037,13 @@ function openAuthDrawer(bindEmail) {
       const code = ($('#authCode').value || '').trim();
       const r = await api('/auth/email/verify', { method: 'POST', body: { email: DLG.email, code } });
       if (r.status !== 200) { if (msg) msg.textContent = '验证失败：' + (r.body.error || r.status); return false; }
-      toast('绑定成功', { kind: 'ok' }); setTimeout(() => location.reload(), 500); return false;
+      // outcome copy reflects what the server actually did (E-194):
+      // mergedInto = cross-device login with merge, inPlace = fresh binding
+      const b = r.body || {};
+      if (b.mergedInto) toast('登录成功：本机数据已合并进已有账号', { kind: 'ok' });
+      else if (b.inPlace) toast('绑定成功', { kind: 'ok' });
+      else toast('登录成功', { kind: 'ok' });
+      setTimeout(() => location.reload(), 700); return false;
     } };
   renderModal();
 }

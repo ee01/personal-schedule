@@ -187,11 +187,15 @@ function describeRole(type, cfg) {
     const current = m ? auth.userBySession(m[1]) : null;
     const existing = db.prepare('SELECT id, email, is_guest FROM users WHERE email = ?').get(normEmail);
 
-    // an email already owned by a DIFFERENT account is a conflict — whether the
-    // current session is a real account (silent switch) or a single-device
-    // account (silent migration + connection overwrite). Both are refused.
-    if (existing && current && existing.id !== current.id) {
-      throw badRequest('该邮箱已被另一个账号使用；如需合并两个账号，请通过明确的冲突处理流程', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
+    // an email already owned by a DIFFERENT account is only a conflict when
+    // the current session is itself a real (non-guest) account — silently
+    // switching a logged-in session to another account stays refused.
+    // A single-device session verifying a code for that email is the
+    // legitimate cross-device login: the verified code proves ownership of
+    // the email, so below the guest's local data merges into that account
+    // instead of erroring out (E-194).
+    if (existing && current && existing.id !== current.id && current.is_guest !== 1) {
+      throw badRequest('该邮箱属于另一个账号；请先退出当前账号后再登录', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
     }
 
     if (current && current.is_guest === 1) {
@@ -210,6 +214,16 @@ function describeRole(type, cfg) {
       // must be rejected, not used to complete the binding
       if (row.attempts >= __attemptsLimit()) throw badRequest('尝试次数过多，请重新获取验证码');
       db.prepare('DELETE FROM login_codes WHERE email = ?').run(normEmail);
+      // cross-device login (E-194): the email belongs to an EXISTING account
+      // and the code just proved the caller owns that email — merge this
+      // device's single-device data into that account, switch the session to
+      // it, and delete the guest identity
+      if (existing && existing.id !== current.id) {
+        const merged = auth.mergeGuestIntoUser(current.id, existing.id);
+        rotateSession(req, res, existing.id, null);
+        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(existing.id);
+        return { user: { ...publicUser(user), isGuest: false }, ...merged, mergedInto: existing.id };
+      }
       const merged = auth.upgradeGuestToEmail(current.id, normEmail);
       rotateSession(req, res, current.id, null); // same userId, fresh session
       return { user: { ...publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(current.id)), isGuest: false }, ...merged, inPlace: true };
@@ -217,7 +231,10 @@ function describeRole(type, cfg) {
 
     const user = auth.verifyEmailCode(normEmail, String(code || ''));
     if (current && current.id !== user.id) {
-      throw badRequest('该邮箱属于另一个账号，不能在此会话上自动切换——请先退出当前账号或使用冲突处理流程', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
+      // a real (non-guest) session can never silently switch to another
+      // account — log out first, then log in (guest sessions were handled
+      // above with a merge)
+      throw badRequest('该邮箱属于另一个账号；请先退出当前账号后再登录', { conflict: 'email_belongs_to_other_account', currentUserId: current.id });
     }
     const merged = mergeGuestOnLogin(req, user.id);
     rotateSession(req, res, user.id, null);

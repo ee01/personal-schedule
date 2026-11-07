@@ -596,34 +596,160 @@ test('single-device binding a fresh email upgrades IN PLACE (userId and connecti
   } finally { await new Promise((r2) => ctx.server.close(r2)); }
 });
 
-test('single-device binding an email owned by ANOTHER account is refused (no silent migration/overwrite)', async () => {
+test('E-194: single-device session with data logs into an EXISTING account — merge, dedupe, guest deleted', async () => {
   const ctx = await fresh();
   try {
+    // existing real account (e.g. created on another device) with a task, a tag and a connection
     const owner = ctx.services.auth.ensureUser('owner.acc@ringcentral.com');
+    const ownerTok = ctx.services.auth.issueToken(owner.id, 'owner');
+    const ownerLogin = await ctx.req('POST', '/api/v1/auth/login', { body: { token: ownerTok } });
+    const ownerCookie = ownerLogin.headers['set-cookie'][0].split(';')[0];
+    const ownerTag = await ctx.req('POST', '/api/v1/tags', { cookie: ownerCookie, body: { name: '工作', color: '#f80' } });
+    const ownerTagId = (await ownerTag.json()).id;
+    await ctx.req('POST', '/api/v1/tasks', { cookie: ownerCookie, body: {
+      type: 'asme', title: '账号原有任务', content: 'x',
+      scheduleSpec: { kind: 'rate', intervalMinutes: 1440, timezone: 'UTC' },
+      config: { chatId: 'c' }, tagIds: [ownerTagId],
+    } });
+    ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)')
+      .run(owner.id, 'rc_user', JSON.stringify({ token: 'owner-real-token' }), nowSec());
+
+    // new device: single-device session with LOCAL data (task + same-name tag + own tag + connections)
     const g = await ctx.req('POST', '/api/v1/auth/guest');
-    const cookie = g.headers['set-cookie'][0].split(';')[0];
-    const connBody2 = { value: { token: 'mine', ownChatId: 'me' } };
-    await ctx.req('PUT', '/api/v1/connections/rc_user', { cookie, body: connBody2 });
-    const before = await ctx.req('GET', '/api/v1/tasks', { cookie });
+    const guestCookie = g.headers['set-cookie'][0].split(';')[0];
+    const guestId = (await g.json()).id;
+    const sameTag = await ctx.req('POST', '/api/v1/tags', { cookie: guestCookie, body: { name: '工作', color: '#08f' } });
+    const onlyTag = await ctx.req('POST', '/api/v1/tags', { cookie: guestCookie, body: { name: '客方', color: '#888' } });
+    const created = await ctx.req('POST', '/api/v1/tasks', { cookie: guestCookie, body: {
+      type: 'asme', title: '新设备临时任务', content: 'x',
+      scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(Date.now() / 1000) + 3600, timezone: 'UTC' },
+      config: { chatId: 'c' }, tagIds: [(await sameTag.json()).id, (await onlyTag.json()).id],
+    } });
+    assert.equal(created.statusCode, 200);
+    // guest binds a gap-filling connection (memory) and a CONFLICTING one (rc_user)
+    ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)')
+      .run(guestId, 'memory', JSON.stringify({ url: 'http://mem' }), nowSec());
+    ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)')
+      .run(guestId, 'rc_user', JSON.stringify({ token: 'guest-local' }), nowSec());
+
+    // email login for the EXISTING account's email — previously refused with
+    // email_belongs_to_other_account, now the legitimate cross-device login
     __config.authDevFallback = true;
-    const req = await ctx.req('POST', '/api/v1/auth/email/request', { cookie, body: { email: 'owner.acc@ringcentral.com' } });
+    await ctx.req('POST', '/api/v1/auth/email/request', { cookie: guestCookie, body: { email: 'owner.acc@ringcentral.com' } });
     const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('owner.acc@ringcentral.com');
     const { createHash } = await import('node:crypto');
     let code = null;
     for (let i = 100000; i <= 999999 && !code; i += 1) {
       if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
     }
-    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie, body: { email: 'owner.acc@ringcentral.com', code } });
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie: guestCookie, body: { email: 'owner.acc@ringcentral.com', code } });
+    assert.equal(v.statusCode, 200, 'cross-device login succeeds (was: refused conflict)');
+    const body = await v.json();
+    assert.equal(body.mergedInto, owner.id, 'merge target reported');
+    assert.equal(body.user.id, owner.id, 'session switched to the existing account');
+    assert.equal(body.user.isGuest, false);
+
+    // new cookie = the real account; the guest cookie is gone
+    const realCookie = v.headers['set-cookie'][0].split(';')[0];
+    const me = await ctx.req('GET', '/api/v1/me', { cookie: realCookie });
+    assert.equal((await me.json()).email, 'owner.acc@ringcentral.com');
+    assert.notEqual((await ctx.req('GET', '/api/v1/me', { cookie: guestCookie })).statusCode, 200, 'guest session rotated out');
+
+    // both accounts' tasks now under the real account
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: realCookie });
+    const list = await tasks.json();
+    const flat = Array.isArray(list) ? list : list.tasks || [];
+    assert.ok(flat.some((t) => t.title === '账号原有任务'));
+    assert.ok(flat.some((t) => t.title === '新设备临时任务'), 'guest task merged into the real account');
+
+    // same-name tag absorbed into the real account's tag; guest-only tag moved
+    const tags = await ctx.req('GET', '/api/v1/tags', { cookie: realCookie });
+    const tagList = await tags.json();
+    assert.equal(tagList.filter((t) => t.name === '工作').length, 1, 'same-name tag deduped (one 工作)');
+    assert.ok(tagList.some((t) => t.name === '客方'), 'guest-only tag moved');
+    const moved = flat.find((t) => t.title === '新设备临时任务');
+    const detail = await ctx.req('GET', `/api/v1/tasks/${moved.id}`, { cookie: realCookie });
+    const dTags = ((await detail.json()).tags || []).map((t) => t.name).sort();
+    assert.deepEqual(dTags, ['客方', '工作'], 'task-tag links survive the merge (remapped to the real tag)');
+
+    // connections: the real account's credentials win; the guest's fill gaps
+    const conns = await ctx.req('GET', '/api/v1/connections', { cookie: realCookie });
+    const cb = await conns.json();
+    assert.ok(cb.memory, 'gap-filling guest connection transferred');
+    const rcRow = ctx.db.prepare('SELECT value FROM connections WHERE user_id = ? AND key = ?').get(owner.id, 'rc_user');
+    assert.ok(String(rcRow.value).includes('owner-real-token'), 'real account credentials NOT overwritten by the merge');
+
+    // guest identity fully deleted
+    const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
+    assert.equal(guests.n, 0, 'single-device account deleted after the merge');
+  } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
+});
+
+
+test('E-194: fresh device with NO local data logs into the existing account and sees its data', async () => {
+  const ctx = await fresh();
+  try {
+    // the reported bug: existing account with data, brand-new device
+    const owner = ctx.services.auth.ensureUser('e.prod@ringcentral.com');
+    const tok = ctx.services.auth.issueToken(owner.id, 'seed');
+    const login = await ctx.req('POST', '/api/v1/auth/login', { body: { token: tok } });
+    const ownerCookie = login.headers['set-cookie'][0].split(';')[0];
+    await ctx.req('POST', '/api/v1/tasks', { cookie: ownerCookie, body: {
+      type: 'asme', title: '已有账号任务', content: 'x',
+      scheduleSpec: { kind: 'rate', intervalMinutes: 1440, timezone: 'UTC' },
+      config: { chatId: 'c' },
+    } });
+
+    // new device auto-creates a single-device session with ZERO data
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const guestCookie = g.headers['set-cookie'][0].split(';')[0];
+    __config.authDevFallback = true;
+    await ctx.req('POST', '/api/v1/auth/email/request', { cookie: guestCookie, body: { email: 'e.prod@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('e.prod@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie: guestCookie, body: { email: 'e.prod@ringcentral.com', code } });
+    assert.equal(v.statusCode, 200, 'empty guest session logs into the existing account (the reported error)');
+    const body = await v.json();
+    assert.equal(body.user.id, owner.id);
+    assert.equal(body.user.isGuest, false);
+    // the existing account's data is what the device now sees
+    const realCookie = v.headers['set-cookie'][0].split(';')[0];
+    const tasks = await ctx.req('GET', '/api/v1/tasks', { cookie: realCookie });
+    const list = await tasks.json();
+    const flat = Array.isArray(list) ? list : list.tasks || [];
+    assert.ok(flat.some((t) => t.title === '已有账号任务'), 'existing account data presented on the new device');
+    const guests = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE is_guest = 1').get();
+    assert.equal(guests.n, 0, 'empty guest account cleaned up');
+  } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
+});
+
+
+test('E-194: a logged-in real account still cannot silently switch to ANOTHER account email', async () => {
+  const ctx = await fresh();
+  try {
+    const a = ctx.services.auth.ensureUser('a.acc@ringcentral.com');
+    ctx.services.auth.ensureUser('b.acc@ringcentral.com');
+    const tok = ctx.services.auth.issueToken(a.id, 'a');
+    const login = await ctx.req('POST', '/api/v1/auth/login', { body: { token: tok } });
+    const cookieA = login.headers['set-cookie'][0].split(';')[0];
+    __config.authDevFallback = true;
+    await ctx.req('POST', '/api/v1/auth/email/request', { body: { email: 'b.acc@ringcentral.com' } });
+    const row = ctx.db.prepare('SELECT code_hash FROM login_codes WHERE email = ?').get('b.acc@ringcentral.com');
+    const { createHash } = await import('node:crypto');
+    let code = null;
+    for (let i = 100000; i <= 999999 && !code; i += 1) {
+      if (createHash('sha256').update(String(i)).digest('hex') === row.code_hash) code = String(i);
+    }
+    // account A's session verifying B's email: no silent account switch
+    const v = await ctx.req('POST', '/api/v1/auth/email/verify', { cookie: cookieA, body: { email: 'b.acc@ringcentral.com', code } });
     assert.equal(v.statusCode, 400);
-    assert.equal((await v.json()).conflict, 'email_belongs_to_other_account', 'no silent takeover of another account');
-    // the conflict must have consumed the code WITHOUT touching either account:
-    // the owner account still owns its identity and the guest stays a guest.
-    const ownerRow = ctx.db.prepare('SELECT id, email, is_guest FROM users WHERE id = ?').get(owner.id);
-    assert.equal(ownerRow.email, 'owner.acc@ringcentral.com');
-    assert.equal(ownerRow.is_guest, 0);
-    const guestRow = ctx.db.prepare('SELECT is_guest FROM users WHERE id = ?').get(ctx.db.prepare('SELECT user_id FROM sessions WHERE id IN (SELECT id FROM sessions ORDER BY created_at DESC LIMIT 2)').get()?.user_id || '');
-    // simpler: no user row was migrated/overwritten — owner's email unique
-    const count = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE email = ?').get('owner.acc@ringcentral.com').n;
+    assert.equal((await v.json()).conflict, 'email_belongs_to_other_account', 'no silent switch between two real accounts');
+    // neither account was touched
+    const count = ctx.db.prepare('SELECT COUNT(*) n FROM users WHERE email = ?').get('b.acc@ringcentral.com').n;
     assert.equal(count, 1, 'no duplicate account created');
   } finally { __config.authDevFallback = true; await new Promise((r2) => ctx.server.close(r2)); }
 });

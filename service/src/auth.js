@@ -166,19 +166,21 @@ export function createAuth(db) {
   }
 
   /**
-   * Merge a guest account into a real account on "保存并登录": the guest's
-   * tasks (and their occurrences) move to the real account. Connections stay
-   * behind on the guest account — a guest is not supposed to configure
-   * credentials, and silently importing them could overwrite real ones.
-   */
-  /**
-   * Single-device (guest) binding semantics:
-   *  - binding a NEW email upgrades the guest account IN PLACE — the userId
-   *    never changes, tasks/runs/connections simply become reachable from the
-   *    email identity. We attach the email to the existing guest user row
-   *    (clearing is_guest) instead of migrating into another account.
-   *  - merging into an existing OTHER account (silent takeover) is refused:
-   *    see the conflict guard in the verify route.
+   * Merge a guest (single-device) account into a real account on login.
+   * Used when a single-device session logs into an EXISTING account (email
+   * code verified or PAT login): the guest's tasks, runs, tags, shares and
+   * import history move to the real account, then the guest identity is
+   * deleted. Ownership of the target account is proven by the caller (a
+   * verified login code or a valid PAT) — this is a login, not a takeover.
+   *
+   * Conflict policy on merge:
+   *  - tasks/occurrences: ids are unique per row, they simply move.
+   *  - tags: a same-name tag on the real account absorbs the guest's tag
+   *    (task links and shares re-point to the real tag; no name duplicates).
+   *  - connections: the REAL account's credentials win; the guest's only
+   *    fill keys the real account has not configured.
+   *  - share import dedupe refs / create idempotency keys: existing rows of
+   *    the real account win, the guest's are dropped on clash.
    */
   function upgradeGuestToEmail(guestId, email) {
     if (!guestId || !email) return { merged: 0, note: 'missing ids' };
@@ -197,28 +199,72 @@ export function createAuth(db) {
     if (guestId === realId) return { merged: 0, note: 'same user' };
     const guest = db.prepare('SELECT * FROM users WHERE id = ?').get(guestId);
     if (!guest || guest.is_guest !== 1) return { merged: 0, note: 'not a guest account' };
+    const real = db.prepare('SELECT * FROM users WHERE id = ?').get(realId);
+    if (!real) return { merged: 0, note: 'target account missing' };
     // node:sqlite has no .transaction() helper — explicit BEGIN/COMMIT
     db.exec('BEGIN');
     try {
-      db.prepare('UPDATE tasks SET user_id = ?, updated_at = ? WHERE user_id = ?').run(realId, nowSec(), guestId);
+      const now = nowSec();
+      // tasks + occurrences move with their ids (occ_key is globally unique,
+      // so no clash is possible)
+      db.prepare('UPDATE tasks SET user_id = ?, updated_at = ? WHERE user_id = ?').run(realId, now, guestId);
       db.prepare('UPDATE occurrences SET user_id = ? WHERE user_id = ?').run(realId, guestId);
-      db.prepare("DELETE FROM task_tags WHERE task_id NOT IN (SELECT id FROM tasks WHERE user_id = ?)").run(realId);
-      // single-device connections transfer with the account (defect 5: binding
-      // must not lose the RC/Memory connections configured before binding)
+      // tags: a same-name tag on the real account absorbs the guest's tag —
+      // task links and owned shares re-point to the surviving tag row
+      const guestTags = db.prepare('SELECT id, name FROM tags WHERE user_id = ?').all(guestId);
+      for (const tag of guestTags) {
+        const twin = db.prepare('SELECT id FROM tags WHERE user_id = ? AND name = ?').get(realId, tag.name);
+        if (twin) {
+          db.prepare('UPDATE task_tags SET tag_id = ? WHERE tag_id = ?').run(twin.id, tag.id);
+          db.prepare('UPDATE shares SET tag_id = ? WHERE tag_id = ?').run(twin.id, tag.id);
+          db.prepare('DELETE FROM tags WHERE id = ?').run(tag.id);
+        } else {
+          db.prepare('UPDATE tags SET user_id = ? WHERE id = ?').run(realId, tag.id);
+        }
+      }
+      // shares the guest owns move with the account
+      db.prepare('UPDATE shares SET owner_user_id = ? WHERE owner_user_id = ?').run(realId, guestId);
+      // share imports the guest received: records + dedupe refs move, the
+      // real account's existing rows win on conflict
       db.prepare(
-        `INSERT INTO connections (user_id, key, value, updated_at)
-         SELECT ?, key, value, ? FROM connections WHERE user_id = ?
-         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      ).run(realId, nowSec(), guestId);
-      db.prepare('DELETE FROM tokens WHERE user_id = ?').run(guestId);
+        `INSERT INTO import_records (id, share_id, receiver_user_id, request_id, imported_at, selected, snapshot, results)
+         SELECT id, share_id, ?, request_id, imported_at, selected, snapshot, results FROM import_records WHERE receiver_user_id = ?
+         ON CONFLICT DO NOTHING`,
+      ).run(realId, guestId);
+      db.prepare('DELETE FROM import_records WHERE receiver_user_id = ?').run(guestId);
+      db.prepare(
+        `INSERT INTO imported_refs (receiver_user_id, ref_key, task_id, imported_at)
+         SELECT ?, ref_key, task_id, imported_at FROM imported_refs WHERE receiver_user_id = ?
+         ON CONFLICT(receiver_user_id, ref_key) DO NOTHING`,
+      ).run(realId, guestId);
+      db.prepare('DELETE FROM imported_refs WHERE receiver_user_id = ?').run(guestId);
+      // per-owner create-idempotency keys follow the moved tasks
+      db.prepare(
+        `INSERT INTO task_create_keys (user_id, key, task_id, created_at)
+         SELECT ?, key, task_id, created_at FROM task_create_keys WHERE user_id = ?
+         ON CONFLICT(user_id, key) DO NOTHING`,
+      ).run(realId, guestId);
+      db.prepare('DELETE FROM task_create_keys WHERE user_id = ?').run(guestId);
+      // directory cache is user-scoped and self-refilling — drop the guest's
+      db.prepare('DELETE FROM directory_cache WHERE user_id = ?').run(guestId);
+      // connections (single-device accounts are full accounts, X6): the real
+      // account's credentials win, the guest's only fill unconfigured keys —
+      // a merge must never overwrite the logged-in account's credentials
+      db.prepare(
+        `INSERT INTO connections (user_id, key, value, updated_at, verified, verified_at, verify_error)
+         SELECT ?, key, value, updated_at, verified, verified_at, verify_error FROM connections WHERE user_id = ?
+         ON CONFLICT(user_id, key) DO NOTHING`,
+      ).run(realId, guestId);
       db.prepare('DELETE FROM connections WHERE user_id = ?').run(guestId);
+      // drop the guest identity (sessions cascade with the user row)
+      db.prepare('DELETE FROM tokens WHERE user_id = ?').run(guestId);
       db.prepare('DELETE FROM users WHERE id = ?').run(guestId);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
     }
-    return { merged: 1 };
+    return { merged: 1, mergedInto: realId };
   }
 
   function userBySession(token) {
