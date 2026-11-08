@@ -53,35 +53,72 @@ function rcServerUrl(connection) {
   return server;
 }
 
+// E-195: RingCentral's OAuth endpoints live OUTSIDE the versioned API —
+// the correct path is /restapi/oauth/token. The versioned path
+// /restapi/v1.0/oauth/token does not exist on the real platform and the
+// gateway answers AGW-404 "Resource not found" to everything (that was the
+// original "rc bot auth failed (404)").
+const RC_OAUTH_TOKEN_PATH = '/restapi/oauth/token';
+
+// E-195 方案 A: RC does NOT support the OAuth2 client_credentials grant
+// (it answers OAU-270 asking for partner-only brand_id/account_id params).
+// The supported server-to-server flow is the JWT grant: Basic(clientId:
+// clientSecret) + grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer +
+// assertion=<JWT downloaded from the developer console>.
+const RC_JWT_GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+
+// JWT-flow access tokens live ~1h; cache per credential set so a dispatched
+// run / verification reuses an unexpired token instead of a new handshake
+// per call. In-memory only — the assertion itself is the durable credential.
+const jwtTokenCache = new Map();
+function jwtCacheKey(connection) {
+  // include the (trust-gated) target so cached tokens never cross servers
+  return `${connection.serverUrl || ''}\n${connection.clientId}\n${connection.jwt}`;
+}
+async function rcJwtAccessToken(connection) {
+  const cacheKey = jwtCacheKey(connection);
+  const cached = jwtTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > nowSec() + 60) return cached.token;
+  const basic = Buffer.from(`${connection.clientId}:${connection.clientSecret}`).toString('base64');
+  const response = await fetch(`${rcServerUrl(connection)}${RC_OAUTH_TOKEN_PATH}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `grant_type=${encodeURIComponent(RC_JWT_GRANT)}&assertion=${encodeURIComponent(connection.jwt)}`,
+    // BUG-61 remainder: the OAuth token exchange is an RC request too — it
+    // must refuse redirects exactly like the httpJson helper. A 302 used
+    // to be followed: same-origin path redirects carried the Basic header to
+    // the second path and verification still succeeded.
+    redirect: 'error',
+  });
+  if (!response.ok) throw new Error(`rc jwt auth failed (${response.status})`);
+  const payload = await response.json();
+  if (!payload || typeof payload.access_token !== 'string') {
+    // a bare 200 is not a token grant — shape-check like the whoami path
+    throw new Error('rc jwt auth response malformed (no access_token)');
+  }
+  const ttl = Number(payload.expires_in) > 120 ? Number(payload.expires_in) - 60 : 300;
+  if (jwtTokenCache.size > 100) jwtTokenCache.clear();
+  jwtTokenCache.set(cacheKey, { token: payload.access_token, expiresAt: nowSec() + ttl });
+  return payload.access_token;
+}
+
 async function rcAccessToken(connection) {
   const server = rcServerUrl(connection); // trust-gated, redirects refused
   if (connection.kind === 'bot') {
-    if (connection.token && (!connection.tokenExpiresAt || connection.tokenExpiresAt > nowSec() + 60)) {
-      return connection.token;
-    }
-    const basic = Buffer.from(`${connection.clientId}:${connection.clientSecret}`).toString('base64');
-    const response = await fetch(`${server}/restapi/v1.0/oauth/token`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: 'grant_type=client_credentials',
-      // BUG-61 remainder: the bot OAuth token exchange is an RC request too —
-      // it must refuse redirects exactly like the httpJson helper. A 302 used
-      // to be followed: same-origin path redirects carried the Basic header to
-      // the second path and verification still succeeded.
-      redirect: 'error',
-    });
-    if (!response.ok) throw new Error(`rc bot auth failed (${response.status})`);
-    const payload = await response.json();
-    if (!payload || typeof payload.access_token !== 'string') {
-      // a bare 200 is not a token grant — shape-check like the whoami path
-      throw new Error('rc bot auth response malformed (no access_token)');
-    }
-    return payload.access_token;
+    // E-195 方案 B: a RingCentral bot ("Bot App for Team Messaging") is
+    // issued a long-lived access token at install time (pushed to the app's
+    // OAuth redirect URI). It is permanent until the bot is uninstalled —
+    // no exchange, no refresh; the stored token IS the credential.
+    if (!connection.token) throw new Error('rc bot access token missing (填 Bot 安装时获取的 Access Token)');
+    return connection.token;
   }
-  // user JWT (AsMe): provided by the user's RC authorization
+  // user (AsMe) — E-195 方案 A: JWT flow with clientId/clientSecret/JWT,
+  // auto-renewed from the same assertion. Legacy values that hold a raw
+  // access token (extension bridge / previous setups) keep working verbatim.
+  if (connection.jwt) return rcJwtAccessToken(connection);
   if (!connection.token) throw new Error('rc user token missing/expired (re-authorize in Settings)');
   return connection.token;
 }

@@ -8,7 +8,7 @@
 //   field-level template validation. Validation failure or missing body pauses
 //   publishing and notifies the owner — the full run result is never dumped to
 //   a group as a fallback.
-import { providers } from './providers.js';
+import { providers, rcPostMessage } from './providers.js';
 import { nowSec, parseJson } from './util.js';
 
 export function createNotify(db, { publicBaseUrl }) {
@@ -45,11 +45,10 @@ export function createNotify(db, { publicBaseUrl }) {
       if (!conn) throw new Error('no rc_user/rc_bot connection configured for owner notification');
       const ownerChat = task.config?.ownerChatId || conn.ownChatId || '';
       if (!ownerChat) throw new Error('owner chatId unknown — set it in Settings → Connections');
-      const post = await providers.asme.run({
-        task: { config: { chatId: ownerChat }, content: body },
-        occurrence,
-        connections: { rc_user: userConn, rc_bot: botConn },
-      });
+      // E-195: deliver with the identity the connection actually is — the bot
+      // fallback used to run the asme provider against the bot credential
+      // (rc_user path), so it could never deliver.
+      const post = await rcPostMessage(conn, userConn ? 'user' : 'bot', { chatId: ownerChat, text: body });
       result.delivered = true;
       result.evidence = post.evidence;
     } catch (error) {

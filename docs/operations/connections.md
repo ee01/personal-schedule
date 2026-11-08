@@ -8,8 +8,10 @@
 
 | 连接 key | 所需材料 | 续期行为 |
 |---|---|---|
-| `rc_user`（以我发送 + 个人通知收件） | RC Server（默认 `https://platform.ringcentral.com`）+ **用户 JWT**（RC 开发者控制台/现有 Personal AI 扩展中的用户授权产物）+ ownChatId（通知收件聊天） | JWT 过期后**需重新授权**（Settings 重填）。服务端无 OAuth 刷新链；扩展桥（E-184）后续可代持推送 |
-| `rc_bot`（Bot 发送） | RC Server + Bot **Client ID / Client Secret** | **自动续期**：服务端用 client_credentials 换 token，无需人工操作 |
+| `rc_user`（以我发送 + 个人通知收件） | RC Server（默认 `https://platform.ringcentral.com`）+ **Client ID / Client Secret / JWT**（RC 开发者控制台 App 的 Credentials 页下载，需 App 启用 JWT auth flow，权限含 Team Messaging）+ ownChatId（通知收件聊天） | **自动续期**：服务端用 JWT 流（`/restapi/oauth/token`，grant_type `urn:ietf:params:oauth:grant-type:jwt-bearer`）自动换 token，无需人工操作。JWT 本体长期有效，撤销需在控制台重置 |
+| `rc_bot`（Bot 发送） | RC Server + Bot 安装时拿到的**长期 Access Token**（"Bot App for Team Messaging" 在控制台点 Install 后，RC 会把 token POST 到 App 配置的 OAuth redirect URI） | **无需续期**：安装时签发的 token 是长期的，直到 Bot 被卸载/重装才需要重新填入 |
+
+E-195 背景：RingCentral 的 OAuth 端点在版本化 API 之外（`/restapi/oauth/token`，不是 `/restapi/v1.0/oauth/token`），且**不支持** OAuth2 `client_credentials` 授权（OAU-270，仅合作伙伴通道）；服务端发送一律走 Bearer token。
 
 受控测试对象：给自己的 Glip 聊天（ownChatId）发一条测试消息（AsMe 一次、Bot 一次）。测试前先点"测试连接"（rcWhoAmI，只读）。建议使用 E 自己的账号与一个私有测试群。
 

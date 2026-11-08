@@ -885,7 +885,8 @@ function describeRole(type, cfg) {
   app.get('/api/v1/bots', async (req) => {
     const user = requireUser(db, auth, req);
     const conn = getConnections(user.id, 'rc_bot');
-    if (!conn || !conn.clientId || !conn.clientSecret) {
+    // E-195 方案 B: the bot credential IS the install-time access token
+    if (!conn || !conn.token) {
       return { bots: [], configured: false };
     }
     const { tenant, bots } = await rcBotsList(conn);
@@ -996,7 +997,7 @@ function publicUser(user) {
 
 function maskSecrets(key, value) {
   const clone = { ...(typeof value === 'object' && value ? value : {}) };
-  const maskFields = ['token', 'userKey', 'clientSecret', 'password'];
+  const maskFields = ['token', 'userKey', 'clientSecret', 'password', 'jwt'];
   for (const field of maskFields) {
     if (clone[field]) clone[field] = '***';
   }

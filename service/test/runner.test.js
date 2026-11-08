@@ -688,11 +688,68 @@ test('PUT /connections rejects an untrusted RC serverUrl before saving', async (
   assert.equal(stored.n, 0, 'nothing stored for an untrusted target');
 });
 
+// E-195 方案 A end-to-end: saving an rc_user connection with clientId/
+// clientSecret/jwt verifies through the real JWT-flow handshake, and the
+// stored value is masked on read (jwt never echoes back)
+test('PUT /connections/rc_user verifies via the JWT flow and masks the jwt', async () => {
+  const ctx = fresh();
+  const { registerRoutes } = await import('../src/api.js');
+  const { config } = await import('../src/config.js');
+  const http = await import('node:http');
+  const routes = [];
+  const app = { get: (p, h) => routes.push(['GET', p, h]), post: (p, h) => routes.push(['POST', p, h]), put: (p, h) => routes.push(['PUT', p, h]), patch(){}, delete(){} };
+  registerRoutes(app, { db: ctx.db, auth: ctx.auth, store: ctx.store, timeline: ctx.timeline, runner: ctx.runner, shares: ctx.shares, notify: ctx.notify, getConnections: ctx.getConnections });
+  let grants = 0;
+  const stub = await new Promise((resolve) => {
+    const srv = http.createServer((rq, rs) => {
+      const send = (code, body) => { rs.writeHead(code, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(body)); };
+      if (rq.url.startsWith('/restapi/oauth/token')) {
+        grants += 1;
+        const chunks = []; rq.on('data', (c) => chunks.push(c));
+        rq.on('end', () => {
+          const body = Buffer.concat(chunks).toString();
+          assert.match(body, /jwt-bearer/, 'jwt grant sent');
+          assert.match(body, /assertion=my-jwt/, 'assertion sent');
+          assert.match(rq.headers.authorization || '', /^Basic /, 'Basic client auth sent');
+          send(200, { access_token: 'exchanged-token', expires_in: 3600 });
+        });
+        return;
+      }
+      if (rq.url.startsWith('/restapi/v1.0/account/~/extension/~')) {
+        assert.equal(rq.headers.authorization, 'Bearer exchanged-token', 'whoami uses the exchanged token');
+        send(200, { id: 'ext-9', extensionNumber: '109', name: 'AsMe User' });
+        return;
+      }
+      send(404, {});
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  config.rcTestOrigins = [`http://127.0.0.1:${stub.address().port}`];
+  try {
+    const put = routes.find(([m, p]) => m === 'PUT' && p === '/api/v1/connections/{key}')[2];
+    const tok = ctx.auth.issueToken(ctx.user.id, 't');
+    const out = await put({ headers: { authorization: `Bearer ${tok}` }, params: { key: 'rc_user' }, body: { value: { serverUrl: `http://127.0.0.1:${stub.address().port}`, clientId: 'cid', clientSecret: 'sec', jwt: 'my-jwt', ownChatId: 'chat9' } } });
+    assert.equal(out.ok, true, 'save succeeded');
+    assert.equal(out.verification.state, 'ok', 'JWT-flow verification passed');
+    assert.equal(grants, 1, 'exactly one handshake');
+    assert.equal(out.saved.jwt, '***', 'jwt masked in the echo');
+    assert.equal(out.saved.clientSecret, '***', 'clientSecret masked in the echo');
+    // the row itself keeps the real material for dispatch
+    const row = ctx.db.prepare('SELECT value, verified FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'rc_user');
+    assert.equal(row.verified, 1, 'verified state persisted');
+    assert.equal(JSON.parse(row.value).jwt, 'my-jwt', 'raw jwt persisted for the runner');
+  } finally {
+    config.rcTestOrigins = [];
+    stub.closeAllConnections?.();
+    await new Promise((r) => stub.close(r));
+  }
+});
 
-// BUG-61 remainder: the bot OAuth token exchange must also refuse redirects —
-// same-origin path hops used to carry the Basic header to the second path and
-// still verify ok; cross-origin 302s were followed too
-test('bot OAuth token exchange refuses same-origin and cross-origin redirects', async () => {
+
+// BUG-61 remainder: the JWT-flow OAuth token exchange must also refuse
+// redirects — same-origin path hops used to carry the Basic header to the
+// second path and still verify ok; cross-origin 302s were followed too
+test('user JWT token exchange refuses same-origin and cross-origin redirects', async () => {
   const { rcWhoAmI } = await import('../src/providers.js');
   const { config } = await import('../src/config.js');
   const http = await import('node:http');
@@ -705,7 +762,7 @@ test('bot OAuth token exchange refuses same-origin and cross-origin redirects', 
   // same-origin redirect to a different path (the dangerous branch: Basic
   // header survives the hop and the second path answers with a token)
   const sameOrigin = await mkStub((rq, rs) => {
-    if (rq.url.startsWith('/restapi/v1.0/oauth/token')) {
+    if (rq.url.startsWith('/restapi/oauth/token')) {
       rs.writeHead(302, { Location: 'http://127.0.0.1:' + rq.headers.host.split(':')[1] + '/evil-path' });
       rs.end();
       return;
@@ -734,14 +791,14 @@ test('bot OAuth token exchange refuses same-origin and cross-origin redirects', 
   try {
     // same-origin path redirect: the exchange must FAIL, not follow
     await assert.rejects(
-      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${sameOrigin.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
-      /bot auth|redirect|failed/i,
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${sameOrigin.address().port}`, clientId: 'c', clientSecret: 's', jwt: 'j' }, 'user'),
+      /jwt auth|redirect|failed/i,
       'same-origin redirect on the token endpoint must refuse, not follow',
     );
     // cross-origin redirect: refused as well
     await assert.rejects(
-      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${redirector.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
-      /bot auth|redirect|failed/i,
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${redirector.address().port}`, clientId: 'c', clientSecret: 's', jwt: 'j' }, 'user'),
+      /jwt auth|redirect|failed/i,
       'cross-origin redirect on the token endpoint must refuse',
     );
   } finally {
@@ -750,8 +807,8 @@ test('bot OAuth token exchange refuses same-origin and cross-origin redirects', 
   }
 });
 
-// bot token exchange: a 200 without an access_token is not a grant
-test('bot OAuth token exchange validates the payload shape', async () => {
+// JWT-flow token exchange: a 200 without an access_token is not a grant
+test('user JWT token exchange validates the payload shape', async () => {
   const { rcWhoAmI } = await import('../src/providers.js');
   const { config } = await import('../src/config.js');
   const http = await import('node:http');
@@ -762,13 +819,73 @@ test('bot OAuth token exchange validates the payload shape', async () => {
   config.rcTestOrigins = [`http://127.0.0.1:${junk.address().port}`];
   try {
     await assert.rejects(
-      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${junk.address().port}`, kind: 'bot', clientId: 'c', clientSecret: 's' }, 'bot'),
-      /malformed|no access_token|bot auth/i,
+      () => rcWhoAmI({ serverUrl: `http://127.0.0.1:${junk.address().port}`, clientId: 'c', clientSecret: 's', jwt: 'j' }, 'user'),
+      /malformed|no access_token|jwt auth/i,
       'bare 200 without access_token is not a token grant',
     );
   } finally {
     config.rcTestOrigins = [];
     junk.closeAllConnections?.();
     await new Promise((r) => junk.close(r));
+  }
+});
+
+// E-195: the JWT flow must target /restapi/oauth/token — RingCentral's OAuth
+// endpoints live OUTSIDE the versioned API; the versioned path 404s on the
+// real platform (that was "rc bot auth failed (404)"). The bot connection
+// (方案 B) must instead use its stored install-time token directly.
+test('E-195: JWT flow uses the unversioned OAuth path; bot uses its stored token', async () => {
+  const { rcWhoAmI } = await import('../src/providers.js');
+  const { config } = await import('../src/config.js');
+  const http = await import('node:http');
+  let tokenExchanges = 0;
+  let versionedPathHits = 0;
+  const srv = await new Promise((resolve) => {
+    const s = http.createServer((rq, rs) => {
+      const send = (code, body) => { rs.writeHead(code, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(body)); };
+      if (rq.url.startsWith('/restapi/v1.0/oauth/token')) { versionedPathHits += 1; send(404, { errorCode: 'AGW-404' }); return; }
+      if (rq.url.startsWith('/restapi/oauth/token')) {
+        tokenExchanges += 1;
+        const chunks = [];
+        rq.on('data', (c) => chunks.push(c));
+        rq.on('end', () => {
+          const body = Buffer.concat(chunks).toString();
+          assert.match(body, /urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer|jwt-bearer/, 'JWT grant type sent');
+          send(200, { access_token: 'jwt-flow-token', expires_in: 3600 });
+        });
+        return;
+      }
+      if (rq.url.startsWith('/restapi/v1.0/account/~/extension/~')) {
+        send(200, { id: 'ext-1', extensionNumber: '101', name: 'Who' });
+        return;
+      }
+      send(404, {});
+    });
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  config.rcTestOrigins = [`http://127.0.0.1:${srv.address().port}`];
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    const conn = { serverUrl: base, clientId: 'c', clientSecret: 's', jwt: 'assertion-1' };
+    const who = await rcWhoAmI(conn, 'user');
+    assert.equal(who.extensionNumber, '101', 'JWT flow exchanges a working token');
+    assert.equal(versionedPathHits, 0, 'the versioned oauth path is never used');
+    // the exchange is cached — a second call does not re-handshake
+    await rcWhoAmI(conn, 'user');
+    assert.equal(tokenExchanges, 1, 'unexpired JWT-flow token is reused, not re-exchanged');
+    // 方案 B: the bot connection sends with its stored token, no exchange
+    await rcWhoAmI({ serverUrl: base, kind: 'bot', token: 'bot-install-token' }, 'bot');
+    assert.equal(tokenExchanges, 1, 'bot path performs no OAuth exchange at all');
+    assert.equal(versionedPathHits, 0, 'bot path never touches the oauth endpoints');
+    // a bot credential without a token fails loudly instead of guessing
+    await assert.rejects(
+      () => rcWhoAmI({ serverUrl: base, kind: 'bot' }, 'bot'),
+      /bot access token missing/i,
+      'missing bot token is explicit',
+    );
+  } finally {
+    config.rcTestOrigins = [];
+    srv.closeAllConnections?.();
+    await new Promise((r) => srv.close(r));
   }
 });

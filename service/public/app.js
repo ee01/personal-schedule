@@ -568,7 +568,7 @@ function cfStep3() {
       <div class="picker" id="recPicker"></div>
       <div class="alert warn" id="recNoMatch" style="display:none">没有匹配的对象——可直接回车按输入文本添加（如 esone.qiu → Esone Qiu），发送时按原文投递。</div></div>
       ${hasBot ? botPickerHTML() : `<div class="field"><label>发送身份</label><div class="choice-row"><button class="choice" data-ident="user">以我的身份</button></div></div>`}
-      ${CF.type === 'asme' ? '<div class="alert info">需要 RingCentral 个人授权（连接与执行器 中配置）。</div>' : ''}`;
+      ${CF.type === 'asme' || (CF.type === 'ai_report' && CF.identity !== 'bot') ? rcUserHint() : ''}`;
   }
   // 帮我问：单人 + 不能选自己
   if (CF.type === 'outreach') {
@@ -581,7 +581,8 @@ function cfStep3() {
     <button class="choice" data-exec="default">默认执行器<span class="muted">（Memory Service）</span></button>
     ${S.bots.configured ? '<button class="choice" data-exec="bot">值班 Bot（已校验）</button>' : ''}</div></div>
   <div class="field"><label>运行通知 → 通知我</label><div class="seg" id="notifySeg"><button class="seg-b ${(CF.notifyMode||'every')==='every'?'on':''}" data-nm="every">每次完成</button><button class="seg-b ${(CF.notifyMode||'every')==='failures'?'on':''}" data-nm="failures">仅失败</button><button class="seg-b ${(CF.notifyMode||'every')==='off'?'on':''}" data-nm="off">关闭</button></div>
-    <div class="preview muted" id="notifyPrev"></div></div>
+    <div class="preview muted" id="notifyPrev"></div>
+    ${((CF.notifyMode || 'every') !== 'off' || CF.publish.enabled) && connStateOf('rc_user') !== 'ok' ? '<div class="alert warn">运行通知 / 发布需要 RingCentral 个人授权（尚未配置）。<button class="btn ghost sm" data-configuser>现在配置</button></div>' : ''}</div>
   <div class="field"><span class="label">发布任务产出 → 发送到联系人/群组</span>
     <label class="switch-row"><span class="switch"><input type="checkbox" id="pubOn" ${CF.publish.enabled?'checked':''}><span class="knob"></span></span>开启发布</label>
     <div id="pubBox" style="${CF.publish.enabled?'':'display:none'}">
@@ -607,6 +608,12 @@ function tplRow(f = { name:'', note:'', required:true }, i = 0) {
 function botPickerHTML() {
   if (!S.bots.configured) return `<div class="alert warn">还没有可用的 Bot。<button class="btn ghost sm" data-configbot>配置 Bot</button></div>`;
   return `<div class="field"><label>发送身份</label><div class="choice-row">${S.bots.bots.map((b)=>`<button class="choice" data-ident="bot:${esc(b.id)}">${esc(b.name)}${b.verified?' <span class="ok-chip">已校验</span>':''}</button>`).join('')}</div></div>`;
+}
+// E-195: unconfigured AsMe users get an inline, non-interrupting config
+// entry right in step 3 — same pattern as the Bot config button
+function rcUserHint() {
+  if (connStateOf('rc_user') === 'ok') return '<div class="alert info">发送将使用已配置的 RingCentral 个人授权。</div>';
+  return `<div class="alert warn">发送需要 RingCentral 个人授权（尚未配置）。<button class="btn ghost sm" data-configuser>现在配置</button></div>`;
 }
 /* BUG-03/04/25: single source of truth for the schedule rule */
 function defaultTime() { return { freq: 'daily', at: '09:00', when: '', rate: 60, dow: 1, dom: 1, tz: 'Asia/Shanghai', project: '', milestone: '', off: 0 }; }
@@ -1184,6 +1191,7 @@ function wireCfPane() {
   $$('#cfPane [data-nm]').forEach((b) => b.onclick = () => { CF.notifyMode = b.dataset.nm; renderCfPane(); });
   $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
   $$('#cfPane [data-configbot]').forEach((b) => b.onclick = () => openConnDlg('rc_bot', 3));
+  $$('#cfPane [data-configuser]').forEach((b) => b.onclick = () => openConnDlg('rc_user', 3));
   const pubOn = $('#pubOn'); if (pubOn) pubOn.onchange = (e) => { CF.publish.enabled = e.target.checked; renderModal(); };
   $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
   $$('#cfPane [data-tpl]').forEach((b) => b.onclick = () => {
@@ -1502,10 +1510,11 @@ async function loadTokens() {
     onOk: async () => { await api(`/auth/tokens/${b.dataset.tkdel}`, { method: 'DELETE' }); loadTokens(); toast('已吊销'); return true; } }));
 }
 function openConnDlg(key, returnTo) {
-  const labels = { rc_user: ['Server', 'token', 'ownChatId'], rc_bot: ['Server', 'clientId', 'clientSecret'], memory: ['Base URL', 'userKey'], multica: ['Webhook URL', 'bindingUuid'], jira: ['Base URL', 'token'] };
-  const fields = { rc_user: ['token', 'ownChatId'], rc_bot: ['clientId', 'clientSecret'], memory: ['baseUrl', 'userKey'], multica: ['webhookUrl', 'bindingUuid'], jira: ['baseUrl', 'token'] }[key];
+  const FIELD_LABELS = { clientId: 'Client ID', clientSecret: 'Client Secret', jwt: 'JWT（Credentials 页下载）', ownChatId: 'ownChatId（通知收件聊天）', token: 'Access Token' };
+  const fields = { rc_user: ['clientId', 'clientSecret', 'jwt', 'ownChatId'], rc_bot: ['token'], memory: ['baseUrl', 'userKey'], multica: ['webhookUrl', 'bindingUuid'], jira: ['baseUrl', 'token'] }[key];
   DLG = { key, returnTo, html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>连接 ${{rc_user:'RingCentral 个人授权',rc_bot:'Bot 凭据',memory:'Memory Service',multica:'Multica',jira:'JIRA'}[key]}</h3></div>
-    <div class="mcontent">${fields.map((f)=>`<div class="field"><label>${esc(f)}</label><input class="input" id="cfg-${esc(f)}" ${f.toLowerCase().includes('key')||f.toLowerCase().includes('secret')||f==='token'?'type=password':''}></div>`).join('')}</div>
+    <div class="mcontent">${fields.map((f)=>`<div class="field"><label>${esc(FIELD_LABELS[f] || f)}</label><input class="input" id="cfg-${esc(f)}" ${f.toLowerCase().includes('key')||f.toLowerCase().includes('secret')||f==='token'||f==='jwt'?'type=password':''}></div>`).join('')}
+    <div class="muted" style="font-size:12px;line-height:1.6">${{rc_user:'方案 A（AsMe）：Client ID + Client Secret + JWT（开发者控制台 App 的 Credentials 页下载），服务端自动换 token 并续期。ownChatId 为通知收件聊天。',rc_bot:'方案 B：填 Bot App 安装时拿到的长期 Access Token（无需刷新）。',memory:'',multica:'',jira:''}[key]}</div></div>
     <div class="mfoot"><span class="muted" id="cfgMsg"></span><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn primary" data-act="dlgOk" data-test="1">保存并测试</button></div></div>`,
     onOk: async () => { const value = {}; fields.forEach((f)=>{ value[f] = $('#cfg-'+f).value.trim(); });
       // BUG-59: PUT saves AND verifies server-side; the outcome is explicit —
@@ -1516,7 +1525,7 @@ function openConnDlg(key, returnTo) {
       const v = r.body?.verification;
       if (r.status === 200 && v?.state === 'ok') {
         msg.textContent = '验证成功，已保存'; await loadConnStatus(); await refresh();
-        if (returnTo === 3) { DLG=null; renderModal(); renderCfPane(); toast('Bot 已配置，已自动选中'); return false; }
+        if (returnTo === 3) { DLG=null; renderModal(); renderCfPane(); toast(key === 'rc_bot' ? 'Bot 已配置，已自动选中' : '个人授权已配置'); return false; }
         render(); toast('已连接（验证成功）', { kind: 'ok' }); return true;
       }
       msg.textContent = '验证失败（已保存但不可用）：' + (v?.error || r.body?.error || '请检查字段');
