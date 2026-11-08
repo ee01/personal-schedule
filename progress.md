@@ -337,3 +337,14 @@
 - **部署启用**：`~/personal-schedule/service.env` 追加 `export SCHEDULE_AUTH_LOGIN_BRIDGE=1`（注意：该文件其余行均带 export，无 export 的变量不会传给 exec 的 node——首次追加漏了 export 导致不生效，已修正）+ `launchctl kickstart` 重启；线上 `/api/v1/auth/meta` 现报告 `loginBridge.enabled:true`。
 - **探针扩至 20/20**：模拟扩展完整走通——CLI 签发 PAT → guest 页面点「绑定 Personal AI 扩展」→ 捕获 login-request nonce → 以 PAT+页面 cookie 调 `bridge/exchange` → 会话变为真实账号。
 - **未完成边界（如实）**：Personal AI 扩展本体在两处硬性拒绝 HTTP（`contentScriptSchedule.ts` 的 `location.protocol !== 'https:'` 门禁——HTTP 页面上监听与自动登录不注入；`scheduleAuth.ts` `secureBase()`——Options 里也无法把 HTTP 站点绑定为扩展账号）。该仓库不在本议题改动范围内：用户在扩展 Options 绑定 `http://schedule.xmnup.com` 前需要 Personal AI 侧放开这两处（安全姿态变更），已在议题回复中说明并等待指示。
+
+## 2026-11-08 · E-195：RC 授权链路重构 — Bot 走方案 B、AsMe 走方案 A JWT 流、第 3 步内联配置引导（94/94 + UI 探针 13/13，已部署）
+
+- **根因（线上实测复现）**：RingCentral 的 OAuth 端点在版本化 API 之外——正确路径是 `/restapi/oauth/token`，代码里写的 `/restapi/v1.0/oauth/token` 在真实平台一律 `AGW-404`（即用户报的 `rc bot auth failed (404)`）；且 RC 不支持 OAuth2 `client_credentials`（OAU-270 仅合作伙伴通道）。用户决策：Bot 走方案 B（安装时长期 Access Token），AsMe 走方案 A（JWT 流）。
+- **providers.js**：`rcAccessToken` 重写——bot（方案 B）直接使用存储的安装期 token（无交换、无刷新，缺失时显式报错）；user（方案 A）用 `Basic(clientId:clientSecret)` + `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` + `assertion` 换 token，按 (server, clientId, jwt) 内存缓存（expires_in-60s），JWT 长期有效即自动续期；旧的"直接存 access token"rc_user 值原样兼容。重定向仍一律拒绝（BUG-61 边界保持）。
+- **notify.js**：owner 通知的 bot 兜底修复——原先兜底时仍以 rc_user 路径调 asme provider，永远发不出去；现在直接 `rcPostMessage(conn, user?user:bot)`，bot 凭据真正可兜底。
+- **api.js**：`/api/v1/bots` 的 configured 判定改为 `conn.token`（方案 B）；`maskSecrets` 增加 `jwt`（保存回显与 GET 一律 `***`）。
+- **UI（app.js）**：连接弹窗字段——rc_user = Client ID / Client Secret / JWT / ownChatId（附方案说明），rc_bot = 单一 Access Token；新建任务第 3 步（对象与投递）：asme / ai_report(以我身份) 未配置 rc_user 时显示"现在配置"内联按钮（与 Bot 配置按钮同模式，openConnDlg('rc_user', 3) 原步返回不中断）；帮我做的"运行通知/发布"同样引导。探针 `service/test/probe-e195-ui.mjs` 13/13。
+- **回归（94/94，+1）**：新增 `PUT /connections/rc_user` 走 JWT 流端到端（握手参数、mask、持久化）；重写原 bot 交换测试为 JWT 流（重定向拒绝、payload 形状）；新增 E-195 路径回归（版本化 oauth 路径零命中、JWT 缓存不重复握手、bot 零交换、bot 缺 token 显式失败）。
+- **部署**：`deploy.sh app` + verify 通过；指纹：providers.js=`6766ede5…`、api.js=`d79332e8…`、app.js=`1e1b9b38…`、notify.js=`3df3ba5c…`（服务端与提交一致，线上 `/app/app.js` 同指纹）。
+- **待用户操作**：①方案 A 需在 RC 开发者控制台启用 App 的 JWT auth flow（当前 app 实测 OAU-251 未启用）并从 Credentials 页下载 JWT；②方案 B 需在 Bot App 控制台 Install，从 redirect URI 回调里取长期 token 填入。凭据就位前线上验证无法通过（非代码问题）。
