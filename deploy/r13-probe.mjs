@@ -44,8 +44,10 @@ for (const [name, task, tzName, tz] of [['UTC', utcTask, 'UTC', 'UTC'], ['LA', l
   const fresh = (await api('/tasks')).body.find((x) => x.id === task.id);
   const next2 = [1, 2].map((n) => fresh.next_run_at + n * 86400); // drawer lists runs 2..3
   const expected = next2.map((sec) => wallIn(sec, tz)).join(' | ');
-  const shown = (planTxt.match(/后续运行([\d:\/\s]+)/) || [])[1] || '';
-  const matchCount = expected.split(' | ').filter((e) => shown.replace(/\s/g, '').includes(e.replace(/\s/g, ''))).length;
+  const drawerAll = await page.$eval('#drawerLayer', (e) => e.textContent);
+  const shown = (drawerAll.match(/2026\/11\/\d+\s+09:30(:00)?/g) || []).join(' | ');
+  const shownFlat = shown.replace(/\s|:00/g, '');
+  const matchCount = expected.split(' | ').filter((e) => shownFlat.includes(e.replace(/\s/g, ''))).length;
   check(`BUG-63-${name}-sametz`, matchCount === 2, `future runs in ${tzName} zone (expected ${expected})`);
   // 3. title carries no zone hint — correctness can't come from the title
   check(`BUG-63-${name}-nohint`, !/UTC|上海|洛杉矶|London|UTC|纽约/i.test(task.title), `title: ${task.title}`);

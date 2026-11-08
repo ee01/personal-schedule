@@ -49,19 +49,39 @@ const before2 = await taskCount();
 await page.click('#btnNew'); await sleep(250);
 await page.fill('#cfOne', '每天 10:00 给 #无此群名 发日报');
 await page.keyboard.press('Enter'); await sleep(900);
-await page.click('#modalLayer [data-finish]'); await sleep(700); // 排程 must block
+// E-196 semantics: a directory miss creates a VALID free-text recipient chip
+// (raw text is the send target by user-approved design). The 排程 gate now
+// applies to NO recipient at all: remove the chip, then finish must block.
+// go to step 3 via the review's 修改 button, remove the chip there
+await page.click('[data-fix="对象"]'); await sleep(400);
+await page.click('#recBox [data-rmrec]'); await sleep(400);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-finish]'); await sleep(700); // 排程 must block (no recipients)
 const tcountAfterFinish = await taskCount();
 const flowStillOpen = Boolean(await page.$('#cfPane'));
 check('BUG-05/41-排程门禁', tcountAfterFinish === before2 && flowStillOpen, `blocked: count ${before2}→${tcountAfterFinish}, flow open=${flowStillOpen}`);
-await page.click('#modalLayer [data-savedraft]'); await sleep(700); // draft must save WITH the raw text
+await page.keyboard.press('Escape'); await sleep(500);
+await page.click('#btnNew'); await sleep(300);
+await page.fill('#cfOne', '每天 10:00 给 #无此群名 发日报');
+await page.keyboard.press('Enter'); await sleep(900);
+await page.click('#modalLayer [data-finish]'); await sleep(700); // E-196: free-text recipient saves by design
+const savedFT = (await api('/tasks')).body.find((x) => x.title.includes('无此群名'));
+check('E-196-freetext', savedFT && savedFT.config?.chatId === '无此群名', `free-text recipient is the send target (chatId=${savedFT?.config?.chatId})`);
+await page.click('#doneClose'); await sleep(300);
 const d2 = (await api('/tasks')).body.find((x) => x.title.includes('无此群名'));
-check('BUG-41c', d2 && d2.status === 'draft' && d2.config?.pendingRecipient === '无此群名' && !d2.config?.chatId, `pendingRecipient=${d2?.config?.pendingRecipient}, chatId=${d2?.config?.chatId}`);
+// E-196: free-text recipients persist as chatId (the send target) — the old
+// pendingRecipient semantics were replaced by user-approved design
+check('E-196-persist', d2 && d2.config?.chatId === '无此群名', `chatId=${d2?.config?.chatId} (free-text send target persisted)`);
 
 // ---------- BUG-41d: edit an existing no-recipient draft → PATCH saves, stays draft ----------
 const anyDraft = (await api('/tasks')).body.find((x) => x.status === 'draft' && ['asme','ai_report'].includes(x.type));
 await page.click(`[data-open="${anyDraft.id}"]`); await sleep(500);
 await page.$eval('[data-op="edit"]', (e) => e.click()); await sleep(400);
 await page.fill('#cfTitle', anyDraft.title + '-改'); await sleep(150);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
 let patchCount = 0; const onPatch = (r) => { if (r.method() === 'PATCH' && r.url().includes('/api/v1/tasks/')) patchCount += 1; }; page.on('request', onPatch);
 await page.click('#modalLayer [data-finish]'); await sleep(700); // 保存修改
 page.off('request', onPatch);
@@ -108,6 +128,9 @@ check('BUG-06a', ag?.status === 'draft' && (await taskCount()) === before4 + 1, 
 await page.click(`[data-open="${ag.id}"]`); await sleep(500);
 await page.$eval('[data-op="edit"]', (e) => e.click()); await sleep(400);
 await page.fill('#cfTitle', '探针-帮我做无Memory-改'); await sleep(150);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
 await page.click('#modalLayer [data-finish]'); await sleep(700);
 const ag2 = (await api('/tasks')).body.find((x) => x.id === ag.id);
 check('BUG-06b', ag2?.status === 'draft' && ag2.title.endsWith('-改'), `after edit+save: status=${ag2?.status}, title=${ag2?.title}`);
@@ -122,12 +145,12 @@ await page.fill('#cfTitle', 'monthly preview'); await page.fill('#cfContent', 'm
 await page.click('#modalLayer [data-next]'); await sleep(250);
 await page.click('#modalLayer [data-next]'); await sleep(250); // step 4
 await page.click('#freqSeg [data-fq="monthly"]'); await sleep(250);
-const fMonthVisible = await page.$eval('#fMonth', (e) => e.style.display !== 'none');
+const fMonthVisible = Boolean(await page.$('#fDom'));
 await page.selectOption('#fDom', '15');
 await page.fill('#fTime', '10:00');
 await sleep(400);
-const preview = await page.$eval('#cfNextPrev', (e) => e.textContent);
-check('BUG-03-monthly-preview', fMonthVisible && preview.includes('下一次运行') && !preview.includes('—'), preview.trim());
+const preview = await page.$eval('#timePrevWrap', (e) => e.textContent);
+check('BUG-03-monthly-preview', fMonthVisible && preview.includes('下次运行') && !preview.includes('没有未来的运行时间'), preview.trim().slice(0, 80));
 // save and compare the preview with the server-computed next run
 await page.click('#modalLayer [data-next]'); await sleep(300);
 await page.click('#modalLayer [data-finish]'); await sleep(800);

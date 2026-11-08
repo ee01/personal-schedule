@@ -34,7 +34,7 @@ await sleep(400);
 // step-4 select shows no undefined anywhere
 const step4Txt = await page.$eval('#cfPane', (e) => e.textContent);
 check('BUG-61a-step4-no-undefined', !step4Txt.includes('undefined'), 'step 4 has no undefined text');
-const prev = await page.$eval('#cfNextPrev', (e) => e.textContent);
+const prev = await page.$eval('#timePrevWrap', (e) => e.textContent);
 // the preview must show 00:24 in UTC, not 08:24 (Shanghai) with a UTC label
 check('BUG-61b-preview-tz', /00:24/.test(prev) && !/08:24/.test(prev), `preview: ${prev.trim()}`);
 const tzSel = await page.$eval('#fTz', (e) => ({ value: e.value, text: e.options[e.selectedIndex].textContent }));

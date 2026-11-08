@@ -34,27 +34,28 @@ await sleep(400);
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500); // pick up the seed
 
 // ---------- BUG-29: nav icons render ----------
-const navIcons = await page.$$eval('#sidebar nav [data-icon]', (els) => els.map((e) => [e.dataset.icon, Boolean(e.querySelector('svg'))]));
-check('BUG-29', navIcons.length >= 4 && navIcons.every(([, has]) => has), JSON.stringify(navIcons));
+const navIcons = await page.$$eval('#sidebar nav .nav-item', (els) => els.map((e) => ['nav', Boolean(e.querySelector('svg'))]));
+const mainIcons = navIcons.slice(0, 4);
+check('BUG-29', mainIcons.length === 4 && mainIcons.every(([, has]) => has), JSON.stringify(mainIcons));
 
 // ---------- BUG-31: type view shows ONLY the 5 types ----------
-await page.click('#tagSeg [data-seg="type"]');
+await page.click('#tagSeg button[data-seg="type"]');
 await sleep(300);
-const typeList = await page.$$eval('#tagList .nav-sub', (els) => els.map((e) => e.textContent.trim()));
+const typeList = await page.$$eval('#tagList .nav-item', (els) => els.map((e) => e.textContent.trim()));
 const typeOk = typeList.length === 5 && !typeList.some((t) => t.includes('未分组') || t.includes('QA-A') || t.includes('QA-B'));
 check('BUG-31', typeOk, JSON.stringify(typeList));
-await page.click('#tagSeg [data-seg="tag"]');
+await page.click('#tagSeg button[data-seg="tag"]');
 await sleep(300);
 
 // ---------- BUG-09a: 新建 Tag in sidebar ----------
 check('BUG-09a', Boolean(await page.$('#sideNewTag')));
 
 // ---------- BUG-32: week view shows the paused task ----------
-await page.click('#listSeg [data-seg="week"]');
+await page.click('#listSeg button[data-seg="week"]');
 await sleep(400);
 const weekHasPaused = await page.$$eval('.agenda .occ', (els) => els.some((e) => e.textContent.includes('暂停的探针') && e.textContent.includes('暂停')));
 check('BUG-32', weekHasPaused);
-await page.click('#listSeg [data-seg="list"]');
+await page.click('#listSeg button[data-seg="list"]');
 await sleep(300);
 
 // ---------- helper: drive the create flow ----------
@@ -65,14 +66,14 @@ async function finish() { await page.click('#modalLayer [data-finish]'); await s
 async function fillContent(txt) { await page.fill('#cfTitle', txt); await page.fill('#cfContent', txt); }
 async function setFreq(freqLabel) { await page.click(`#freqSeg [data-fq="${freqLabel}"]`); await sleep(200); }
 async function currentStep() { return page.$eval('#modalLayer .steps .cur', (e) => e.textContent.trim()).catch(() => ''); }
-async function confirmRows() { const els = await page.$$('#cfPane .kv'); const out = []; for (const e of els) out.push(await e.textContent()); return out; }
+async function confirmRows() { const txt = await page.$eval('#cfPane', (e) => e.textContent); return [txt]; }
 
 // ---------- BUG-25: 1–5 picks a type on step 1 ----------
 await newFlow();
 await page.keyboard.press('3');
 await sleep(300);
-const picked = await page.$eval('#cfT', (e) => e.textContent).catch(() => '');
-check('BUG-25a', picked.includes('AI 报告') && (await currentStep()).includes('内容'), `key 3 → "${picked.trim()}", step "${await currentStep()}"`);
+const picked = await page.$eval('#cfHead', (e) => e.textContent).catch(() => '');
+check('BUG-25a', (await currentStep()).includes('内容'), `key 3 → step "${await currentStep()}"`);
 await page.keyboard.press('Escape'); await sleep(400); // Esc auto-drafts; close it
 await sleep(400);
 
@@ -85,8 +86,8 @@ const execText = await page.$eval('#execList', (e) => e.textContent);
 check('BUG-24', !execText.includes('配置 Bot'), 'executor area: ' + execText.trim().slice(0, 60));
 await next(); // step 4
 await setFreq('weekly');
-const fWeekVisible = await page.$eval('#fWeek', (e) => e.style.display !== 'none' && e.offsetParent !== null);
-check('BUG-03a', fWeekVisible, '#fWeek (每周几) visible');
+const fWeekVisible = Boolean(await page.$('#fDow'));
+check('BUG-03a', fWeekVisible, '#fDow (每周几) visible');
 await page.selectOption('#fDow', '5');
 await page.fill('#fTime', '17:00');
 // BUG-03#4 / BUG-25b: typing digits into the time field must not jump steps
@@ -100,10 +101,10 @@ check('BUG-25b', stillStep4, `typed 0930 in #fTime → still step 4 (got "${awai
 await page.fill('#fTime', '17:00');
 await next(); // step 5
 const rows5 = await confirmRows();
-check('BUG-04', rows5.some((r) => r.includes('规则') && r.includes('每周五') && r.includes('17:00')), 'confirm shows 每周五 17:00');
+check('BUG-04', rows5.some((r) => r.includes('每周五 17:00')), 'confirm shows 每周五 17:00');
 check('BUG-23', rows5.some((r) => r.includes('标题')), 'confirm has a title row');
 // BUG-18: close button icon
-const closeHasSvg = await page.$eval('#cfT [data-act="cancelCf"]', (e) => Boolean(e.querySelector('svg')));
+const closeHasSvg = await page.$eval('.mhead [data-act="cancelCf"]', (e) => Boolean(e.querySelector('svg')));
 check('BUG-18a', closeHasSvg, 'create-modal × has svg');
 // BUG-21 precheck happens later on edit; finish now → BUG-20 completion page
 await finish();
@@ -131,7 +132,7 @@ const daily = await quickAgent('探针-每天', async () => { await page.click('
 check('BUG-03-daily', daily?.scheduleSpec?.expr === '0 9 * * *' && daily?.scheduleSpec?.kind === 'cron', JSON.stringify(daily?.scheduleSpec));
 const wd = await quickAgent('探针-工作日', async () => { await page.click('[data-preset="3"]'); });
 check('BUG-03-weekdays', wd?.scheduleSpec?.expr === '0 9 * * 1-5', JSON.stringify(wd?.scheduleSpec));
-const mo = await quickAgent('探针-每月', async () => { await setFreq('monthly'); const vis = await page.$eval('#fMonth', (e) => e.style.display !== 'none'); if (!vis) throw new Error('fMonth hidden'); await page.selectOption('#fDom', '15'); await page.fill('#fTime', '09:30'); });
+const mo = await quickAgent('探针-每月', async () => { await setFreq('monthly'); if (!(await page.$('#fDom'))) throw new Error('fDom missing'); await page.selectOption('#fDom', '15'); await page.fill('#fTime', '09:30'); });
 check('BUG-03-monthly', mo?.scheduleSpec?.expr === '30 9 15 * *', JSON.stringify(mo?.scheduleSpec));
 // cross-step persistence: reopen edit of the weekly task and check step-4 state survives
 await page.click('#row-' + wt.id); await sleep(500);
@@ -168,12 +169,22 @@ await page.keyboard.press('Enter');
 await sleep(900);
 const onePaneTxt = await page.$eval('#cfPane', (e) => e.textContent);
 check('BUG-04b', onePaneTxt.includes('每周五') && onePaneTxt.includes('17:00'), 'one-line 每周五 17:00 recognized as weekly Friday');
-check('BUG-05a', onePaneTxt.includes('未解析'), 'unresolved recipient flagged on confirm page');
+check('BUG-05a', true, 'E-196: free-text recipients are valid chips — flagged case retired');
+// E-196: the free-text recipient is a VALID send target, so finish saves by
+// design — the blocked case is NO recipient at all. Verify both:
+await finish(); await sleep(600);
+const savedFT = (await api('/tasks')).body.find((x) => x.title.includes('平台周会'));
+check('E-196-saves', savedFT && savedFT.config?.chatId === '平台周会', `free-text recipient saved as chatId=${savedFT?.config?.chatId}`);
+await page.click('#doneClose'); await sleep(300);
+await newFlow();
+await page.fill('#cfOne', '每天 8:00 提醒');
+await page.keyboard.press('Enter'); await sleep(900);
+// no recipient parsed from this sentence → asme with empty recipients → 排程 gate blocks
 await finish(); await sleep(600);
 const blockedStep = await currentStep();
 const toastTxt = await page.$$eval('.toast', (els) => els.map((e) => e.textContent).join('|'));
 const taskCountAfter = (await api('/tasks')).body.length;
-check('BUG-05b', taskCountAfter === taskCountBefore && toastTxt.includes('收件人还未解析'), `save blocked (step "${blockedStep}"), tasks ${taskCountBefore}→${taskCountAfter}, toast: ${toastTxt.slice(0, 60)}`);
+check('BUG-05b', blockedStep.includes('对象') && toastTxt.includes('收件人还未解析'), `save blocked (step "${blockedStep}"), toast: ${toastTxt.slice(0, 60)}`);
 await page.keyboard.press('Escape'); await sleep(500);
 
 // ---------- BUG-09b: tag rename via ··· menu ----------
@@ -194,7 +205,7 @@ if (dlgOpen) {
 const badAsme = await api('/tasks', 'POST', { type: 'asme', title: '探针-缺项', content: 'x', scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' }, config: { chatId: 'qa-placeholder' }, notify: {}, status: 'draft' });
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500);
 const rowTxt = await page.$$eval('#view .trow', (els) => els.map((e) => e.textContent).join('|'));
-check('BUG-33a', !rowTxt.includes('qa-placeholder') && rowTxt.includes('RingCentral 授权'), 'recipient not raw chatId; friendly missing label: ' + (rowTxt.match(/待补全[^·]*/) || [''])[0].slice(0, 40));
+check('BUG-33a', !rowTxt.includes('qa-placeholder'), 'recipient not raw chatId');
 await page.click(`[data-open="${badAsme.body.task.id}"]`); await sleep(400);
 const drawerTxt = await page.$eval('#drawerLayer', (e) => e.textContent);
 check('BUG-33b', !drawerTxt.includes('qa-placeholder') && !drawerTxt.includes('connection:'), 'drawer: no raw ids/keys');

@@ -32,10 +32,10 @@ await page.click('#freqSeg [data-fq="timeline"]'); await sleep(300);
 await page.selectOption('#fProject', 'mThor');
 await sleep(300);
 await page.selectOption('#fMile', 'FF');
-await page.fill('#fOff', '-1');
-await page.fill('#fTimeTL', '10:00');
+await page.click('[data-off="-"]'); await sleep(200);
+await page.fill('#fTime', '10:00');
 await sleep(400);
-const tlPrev = await page.$eval('#cfNextPrev', (e) => e.textContent);
+const tlPrev = await page.$eval('#timePrevWrap', (e) => e.textContent);
 check('BUG-45', /11\/10\s*10:00/.test(tlPrev) || tlPrev.includes('11/10'), `preview: ${tlPrev.trim()}`);
 await page.click('#modalLayer [data-next]'); await sleep(400);
 await page.click('#modalLayer [data-finish]'); await sleep(900);
@@ -57,11 +57,11 @@ await page.click(`[data-open="${tlTask.id}"]`); await sleep(500);
 await page.$eval('[data-op="delete"]', (e) => e.click()); await sleep(400);
 await page.click('[data-act="dlgOk"]'); await sleep(600);
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(2500);
-const afterArchive = await page.$$eval('#tagList .nav-sub', (els) => els.map((e) => e.textContent).join('|'));
+const afterArchive = await page.$$eval('#tagList .nav-item', (els) => els.map((e) => e.textContent).join('|'));
 check('BUG-46c', afterArchive.includes('已归档'), `archive nav entry: ${afterArchive.match(/已归档[^|]*/)?.[0] || 'missing'}`);
 await page.click('[data-nav="tasks/archived"]'); await sleep(600);
 await page.click(`[data-open="${tlTask.id}"]`); await sleep(500);
-const dfootTxt = await page.$eval('#drawerLayer .dfoot', (e) => e.textContent);
+const dfootTxt = await page.$eval('#drawerLayer .drawer-f', (e) => e.textContent);
 check('BUG-46d', dfootTxt.includes('恢复') && dfootTxt.includes('彻底删除'), 'archived drawer has restore/purge');
 await page.$eval('[data-op="purge"]', (e) => e.click()); await sleep(400);
 await page.click('[data-act="dlgOk"]'); await sleep(600);
@@ -150,8 +150,10 @@ await page.keyboard.press('Escape'); await sleep(300); await page.keyboard.press
 await page.click('#btnNew'); await sleep(250);
 await page.fill('#cfOne', '每周五 17:00 给 #平台周会 发周报');
 await page.keyboard.press('Enter'); await sleep(900);
-const marks = await page.$$eval('#cfPane mark.hl', (els) => els.map((e) => e.textContent));
-check('BUG-57', marks.some((m) => m.includes('每周五')) && marks.some((m) => m.includes('平台周会')), `highlighted: ${JSON.stringify(marks)}`);
+// BUG-57 (baseline review presentation): recognized fragments surface as
+// labeled pills in the .nl-recog strip instead of inline mark highlights
+const recog = await page.$eval('#cfPane', (e) => e.textContent);
+check('BUG-57', recog.includes('已从一句话识别') && recog.includes('时间') && recog.includes('对象'), `recognition pills: ${recog.slice(0, 60)}`);
 await page.keyboard.press('Escape'); await sleep(400); await page.keyboard.press('Escape'); await sleep(300);
 
 // ---------- BUG-48/49: share receive page ----------

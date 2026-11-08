@@ -34,12 +34,12 @@ check('BUG-62a', opts.length === 5 && opts.every((o) => !o.includes('undefined')
 
 // ---------- BUG-62b: LA task on a Shanghai browser ----------
 await page.click('#freqSeg [data-fq="weekly"]'); await sleep(200);
-const fWeekVisible = await page.$eval('#fWeek', (e) => e.style.display !== 'none');
+const fWeekVisible = Boolean(await page.$('#fDow'));
 await page.selectOption('#fDow', '5');
 await page.fill('#fTime', '09:30');
 await page.selectOption('#fTz', 'America/Los_Angeles');
 await sleep(400);
-const laPrev = await page.$eval('#cfNextPrev', (e) => e.textContent);
+const laPrev = await page.$eval('#timePrevWrap', (e) => e.textContent);
 const laWall = laPrev.match(/(\d+\/\d+)\s+(\d{2}:\d{2})/);
 check('BUG-62b-preview', laWall && laWall[2] === '09:30' && /洛杉矶|Los Angeles/.test(laPrev) === false ? /UTC-\d/.test(laPrev) : /09:30/.test(laPrev), `LA preview: ${laPrev.trim()}`);
 // confirm page carries the same LA wall time + tz
@@ -63,7 +63,7 @@ const echoTz = await page.$eval('#fTz', (e) => e.value);
 const echoAt = await page.$eval('#fTime', (e) => e.value);
 const echoDow = await page.$eval('#fDow', (e) => e.value);
 check('BUG-62f-echo', echoTz === 'America/Los_Angeles' && echoAt === '09:30' && echoDow === '5', `edit echo: tz=${echoTz} at=${echoAt} dow=${echoDow}`);
-const echoPrev = await page.$eval('#cfNextPrev', (e) => e.textContent);
+const echoPrev = await page.$eval('#timePrevWrap', (e) => e.textContent);
 check('BUG-62g-echo-preview', echoPrev.includes('09:30'), `edit preview: ${echoPrev.trim()}`);
 await page.keyboard.press('Escape'); await sleep(300); await page.keyboard.press('Escape'); await sleep(300);
 

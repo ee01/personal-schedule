@@ -43,6 +43,8 @@ const chipsBefore = await page.$$eval('#recBox .chip', (els) => els.length);
 await page.click('#recBox [data-rmrec]'); await sleep(400);
 const chipsAfter = await page.$$eval('#recBox .chip', (els) => els.length);
 check('BUG-42a', chipsBefore === 1 && chipsAfter === 0, `chips ${chipsBefore}→${chipsAfter}`);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
 await page.click('#modalLayer [data-finish]'); await sleep(800); // 保存修改
 t = await find('R6-有收件人草稿');
 check('BUG-42b', t.config.chatId === null && t.status === 'draft', `PATCH saved: chatId=${t.config.chatId}, status=${t.status}`);
@@ -61,6 +63,8 @@ await page.click(`[data-open="${a.id}"]`); await sleep(500);
 await page.$eval('[data-op="edit"]', (e) => e.click()); await sleep(450);
 await page.click('#modalLayer [data-next]'); await sleep(350);
 await page.click('#recBox [data-rmrec]'); await sleep(350);
+await page.click('#modalLayer [data-next]'); await sleep(300);
+await page.click('#modalLayer [data-next]'); await sleep(300);
 await page.click('#modalLayer [data-finish]'); await sleep(800);
 a = await find('R6-活动任务');
 check('BUG-42d', a.status === 'inactive' && (a.missing || []).includes('chatId') && !a.next_run_at, `active→recipient cleared: status=${a.status}, missing=${JSON.stringify(a.missing)}`);

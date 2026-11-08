@@ -10,6 +10,13 @@ function route() {
   render();
 }
 function nav(view, sub) { location.hash = `#/${view}${sub ? '/' + sub : ''}`; }
+function positionSeg(seg) {
+  if (!seg) return; const on = $('[aria-pressed="true"]', seg), th = $('.thumb', seg);
+  if (!on || !th) return;
+  const init = !th.style.width; if (init) th.style.transition = 'none';
+  th.style.left = on.offsetLeft + 'px'; th.style.width = on.offsetWidth + 'px';
+  if (init) { th.offsetWidth; th.style.transition = ''; }
+}
 window.addEventListener('hashchange', route);
 
 /* 窄屏侧栏（E-194 反馈）：拉出后可关闭 —— 遮罩点击 / 面板内关闭按钮 /
@@ -78,65 +85,58 @@ function renderCrumb() {
     else if (S.sub.startsWith('tag:')) sub = '#' + (S.tags.find((t) => t.id === S.sub.slice(4))?.name || '');
     else if (S.sub.startsWith('type:')) sub = (TYPE_LABEL[S.sub.slice(5)] || '').split(' ')[0];
   }
-  $('#crumb').innerHTML = `${label}${sub ? ` <span class="muted">/ ${esc(sub)}</span>` : ''}`;
+  $('#crumb').innerHTML = `<h1>${esc(sub || label)}</h1>`;
   $('#searchBox').style.display = S.view === 'tasks' ? '' : 'none';
   $('#menuToggle').style.display = '';
   const mt = $('#menuToggle');
   if (mt && !mt.innerHTML.trim()) mt.innerHTML = ic('menu');
-  ensureSideScrim();
-  if (mt) mt.onclick = () => { if ($('#sidebar').classList.contains('open')) sideClose(); else sideOpen(); };
+  if (mt) mt.onclick = () => { $('#sidebar').classList.toggle('open'); document.body.classList.toggle('side-open'); };
 }
 
-/* ========================================================= 侧栏（N1–N7, A1） */
 function countBy(f) { return S.tasks.filter(f).length; }
 function renderSidebar() {
   const need = countBy((t) => t.status === 'inactive' || t.missing?.length);
   const sharing = S.shares.filter((s) => !s.revoked).length;
   const idRow = S.user.isGuest
     ? `<button class="guest-pill" data-menu="id-menu" aria-haspopup="menu">单设备模式 ▾</button>`
-    : `<button class="btn ghost sm" data-menu="id-menu">${esc(S.user.email)} ▾</button>`;
-  const tagPart = S.sub.startsWith('tag:') ? S.sub.slice(4) : null;
+    : `<button class="guest-pill" data-menu="id-menu" aria-haspopup="menu">${esc(S.user.email)} ▾</button>`;
+  const typeMode = S.sub.startsWith('type:') || S.groupMode === 'type';
+  const tagPart = !typeMode && S.sub.startsWith('tag:') ? S.sub.slice(4) : null;
   const typePart = S.sub.startsWith('type:') ? S.sub.slice(5) : null;
-  // BUG-31: the two grouping modes are exclusive — the type view never mixes
-  // in Tags or 未分组
-  const typeMode = typePart != null || S.groupMode === 'type';
   $('#sidebar').innerHTML = `
-  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div><button class="btn ghost icon side-close" id="sideClose" aria-label="关闭导航">${ic('close')}</button></div>
-  <button class="btn primary btn-new" id="btnNew">新建计划任务 <kbd>N</kbd></button>
-  <nav>
-    <a class="nav-item ${S.view==='tasks'&&S.sub!=='archived'?'active':''}" data-nav="tasks" aria-current="${S.view==='tasks'?'page':'false'}"><span data-icon="tasks"></span>全部任务<span class="count">${countBy(()=>true)}</span></a>
-    <a class="nav-item ${S.view==='setup'&&S.sub!=='all'?'':''} ${S.view==='setup'?'active':''}" data-nav="setup"><span data-icon="setup"></span>需要补全${need?`<span class="count warn">${need}</span>`:''}</a>
-    <a class="nav-item ${S.view==='shares'?'active':''}" data-nav="shares"><span data-icon="share"></span>分享管理${sharing?`<span class="count">${sharing}</span>`:''}</a>
-    <a class="nav-item ${S.view==='connections'?'active':''}" data-nav="connections"><span data-icon="plug"></span>连接与执行器</a>
+  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div></div>
+  <button class="new-btn" id="btnNew" data-act="create">${ic('plus')} 新建计划任务 <kbd>N</kbd></button>
+  <nav class="side-scroll scroll">
+    <button class="nav-item" data-nav="tasks" aria-current="${S.view==='tasks'&&S.sub!=='archived'?'true':'false'}">${ic('list','sm')} 全部任务<span class="count">${countBy(()=>true)}</span></button>
+    <button class="nav-item" data-nav="setup" aria-current="${S.view==='setup'?'true':'false'}">${ic('inbox','sm')} 需要补全${need?`<span class="badge">${need}</span>`:''}</button>
+    <button class="nav-item" data-nav="shares" aria-current="${S.view==='shares'?'true':'false'}">${ic('share','sm')} 分享管理${sharing?`<span class="count">${sharing}</span>`:''}</button>
+    <button class="nav-item" data-nav="connections" aria-current="${S.view==='connections'?'true':'false'}">${ic('plug','sm')} 连接与执行器</button>
+    <div class="nav-label"><span>分组</span>
+      <span class="seg" role="group" aria-label="分组视角" id="tagSeg"><span class="thumb"></span>
+        <button data-seg="tag" aria-pressed="${!typeMode}">Tag</button>
+        <button data-seg="type" aria-pressed="${typeMode}">类型</button></span>
+    </div>
+    <div id="tagList"></div>
   </nav>
-  <div class="side-tags">
-    <div class="side-h"><span>分组</span><div class="seg" id="tagSeg"><button class="seg-b ${!typeMode?'on':''}" data-seg="tag">Tag</button><button class="seg-b ${typeMode?'on':''}" data-seg="type">类型</button></div></div>
-    <div class="tag-list" id="tagList"></div>
-  </div>
   <div class="side-foot">
-    <div class="runner-pill"><span class="dot"></span>Runner 在线 · 单一调度器</div>
-    <div class="conn-dots" id="connDots" title="连接状态（点击进入连接与执行器）"></div>
+    <button class="conn-strip" data-nav="connections">${ic('server','sm')} Runner 在线 · 单一调度器<span class="dots" id="connDots"></span></button>
   </div>`;
   const list = [];
   if (typeMode) {
-    // BUG-31: the type view lists ALL five types (including zero counts) and nothing else
-    for (const ty of TYPE_ORDER) { const n = countBy((t)=>t.type===ty); list.push('<a class="nav-sub ' + (typePart===ty?'active':'') + '" data-nav="tasks/type:' + ty + '">' + typeIc(ty) + esc(TYPE_LABEL[ty].split(' ')[0]) + '<span class="count">' + n + '</span></a>'); }
+    for (const ty of TYPE_ORDER) list.push(`<button class="nav-item" data-nav="tasks/type:${ty}" aria-current="${typePart===ty}">${typeIc(ty)} ${esc(TYPE_LABEL[ty].split(' ')[0])}<span class="count">${countBy((t)=>t.type===ty)}</span></button>`);
   } else {
-    list.push('<div class="nav-sub"><a data-nav="tasks/ungrouped">未分组<span class="count">' + countBy((t)=>!(t.tags||[]).length) + '</span></a></div>');
-    if (S.archived && S.archived.length) list.push('<div class="nav-sub ' + (S.sub==='archived'?'active':'') + '"><a data-nav="tasks/archived"><span data-icon="archive"></span>已归档<span class="count">' + S.archived.length + '</span></a></div>');
-    for (const tag of S.tags) list.push('<div class="nav-sub ' + (tagPart===tag.id?'active':'') + '"><a data-nav="tasks/tag:' + tag.id + '"><span class="tdot" style="background:' + (tag.color||'#cdf26b') + '"></span>' + esc(tag.name) + '<span class="count">' + countBy((t)=>t.tags?.some(x=>x.id===tag.id)) + '</span></a><button class="btn ghost icon menu-trigger" data-tagmenu="' + tag.id + '" aria-label="Tag 菜单">' + ic('more') + '</button></div>');
-    // BUG-09: 新建 Tag lives in the sidebar
-    list.push('<button class="btn ghost sm" id="sideNewTag" style="margin:8px 4px 2px">＋ 新建 Tag</button>');
+    list.push(`<button class="nav-item" data-nav="tasks/ungrouped" aria-current="${S.sub==='ungrouped'}">${ic('tag','sm')} 未分组<span class="count">${countBy((t)=>!(t.tags||[]).length)}</span></button>`);
+    for (const tag of S.tags) list.push(`<div class="row" style="align-items:center"><button class="nav-item grow" data-nav="tasks/tag:${tag.id}" aria-current="${tagPart===tag.id}"><span class="tag-dot" style="background:${tag.color||'#cdf26b'}"></span> ${esc(tag.name)}<span class="count">${countBy((t)=>t.tags?.some(x=>x.id===tag.id))}</span></button><button class="btn ghost icon menu-trigger" data-tagmenu="${tag.id}" aria-label="Tag 菜单" style="width:28px;height:28px">${ic('more','sm')}</button></div>`);
+    list.push(`<button class="nav-item" id="sideNewTag">${ic('plus','sm')} 新建 Tag</button>`);
+    if (S.archived && S.archived.length) list.push(`<button class="nav-item" data-nav="tasks/archived" aria-current="${S.sub==='archived'}">${ic('archive','sm')} 已归档<span class="count">${S.archived.length}</span></button>`);
   }
   $('#tagList').innerHTML = list.join('');
-  const sn = $('#sideNewTag'); if (sn) sn.onclick = (e) => { e.stopPropagation(); newTagDlg(false); };
-  // 连接状态点（N6/BUG-52）：只显示有真实数据源的项——Runner（服务本体）、
-  // Timeline、Bot、Memory、Multica（连接状态 API）；CLI Worker 数据源未接入，
-  // 不再伪造状态点（详情见连接页）
   const cs = S.connStatus || {};
   const dots = [['ok','Runner'], [S.timeline.some(p=>p.configured)?'ok':'off','Timeline'],
     [S.bots.configured?'ok':'off','Bot'], [connStateOf('memory'),'Memory Service'], [connStateOf('multica'),'Multica']];
-  $('#connDots').innerHTML = dots.map(([k,l])=>`<span class="dot ${k}" title="${l}"></span>`).join('') + `<button class="btn ghost sm" data-nav="connections">详情</button>`;
+  $('#connDots').innerHTML = dots.map(([k,l])=>`<span class="dot ${k}" style="width:6px;height:6px" title="${l}"></span>`).join('');
+  positionSeg($('#tagSeg'));
+  const sn = $('#sideNewTag'); if (sn) sn.onclick = (e) => { e.stopPropagation(); newTagDlg(false); };
   if (S.user.isGuest && countBy(()=>true) >= 1) {
     $('#sidebar').insertAdjacentHTML('beforeend', `<div class="side-note" data-menu="id-menu">绑定后可在其他设备找回 →</div>`);
   }
@@ -198,17 +198,33 @@ function filteredTasks() {
   return list;
 }
 function rowHTML(t) {
-  const src = { glip: 'Glip', import: '分享导入', jira: 'JIRA', local: 'Web 创建' }[t.origin || 'web'] || '';
+  const src = { glip: 'Glip', import: '分享导入', jira: 'JIRA', local: null }[t.origin || 'web'] || null;
   const rcp = recipientsText(t);
   const ev = lastRunSummary(t);
-  return `<div class="trow" id="row-${t.id}" tabindex="0" role="button" data-open="${t.id}">
+  const n = t.next_run_at;
+  const nextCell = n ? `<div class="t">${fmtNextText(n, t.timezone)}</div><div class="r">${relText(n)} · ${tzLabel(t.timezone || 'Asia/Shanghai')}</div>`
+    : `<div class="r">${t.status==='paused'?'已暂停 · 不会触发':t.status==='inactive'?'补全后才会排程':t.status==='draft'?'草稿 · 未排程':t.status==='archived'?'已归档':'—'}</div><div class="r mono" style="font-size:11px">${esc((specText(t) || '').split(' · ')[0])}</div>`;
+  const tags = (t.tags || []).map((g) => `<span class="tag"><span class="tag-dot" style="background:${g.color||'#cdf26b'}"></span>${esc(g.name)}</span>`).join('');
+  return `<div class="trow" role="button" tabindex="0" data-open="${t.id}" id="row-${t.id}">
     ${typeIc(t.type)}
-    <div class="grow"><b>${esc(t.title)}</b>${src ? ` <span class="muted">· ${src}</span>` : ''}<div class="t-meta">${esc(TYPE_LABEL[t.type]||t.type)}${rcp ? ' · 对象：' + esc(rcp) : ''}${(t.missing||[]).length ? ' · <span style="color:var(--warn)">待补全：' + t.missing.map((m)=>esc(missingLabel(m))).join('、') + '</span>' : ''}</div></div>
-    <div class="tags">${(t.tags || []).map((g) => `<span class="tag" style="--tc:${g.color||'#cdf26b'}">#${esc(g.name)}</span>`).join('')}</div>
-    <div class="next">${fmtNext(t.next_run_at, t.timezone)}<div class="s">${t.timezone ? tzLabel(t.timezone) : ''}</div></div>
+    <div style="min-width:0">
+      <div class="title">${esc(t.title)}${src?`<span class="src">${src==='Glip'?ic('alarm','sm'):src==='JIRA'?ic('jira','sm'):ic('download','sm')}${src}</span>`:''}</div>
+      <div class="meta">${esc((TYPE_LABEL[t.type]||t.type).split(' ')[0])} · ${esc(rcp || '未设置收件人')}${(t.missing||[]).length?` · <span style="color:var(--warn)">缺 ${(t.missing||[]).length} 项配置</span>`:''}</div>
+    </div>
+    <div class="tags">${tags||'<span class="muted" style="font-size:12px">—</span>'}</div>
+    <div class="next">${nextCell}</div>
     <div class="lastrun">${ev}</div>
-    <span class="pill ${t.status}">${STATUS_L[t.status]||t.status}</span>
+    <div class="status">${statusPill(t.status)}</div>
   </div>`;
+}
+function statusPill(st) { return `<span class="pill ${st}"><span class="dot"></span>${STATUS_L[st]||st}</span>`; }
+function relText(sec) {
+  const ms = sec * 1000 - Date.now();
+  if (ms <= 0) return '已过';
+  const dd = Math.floor(ms / 864e5), hh = Math.floor(ms / 36e5) % 24;
+  if (dd) return dd + ' 天后';
+  if (hh) return hh + ' 小时后';
+  return Math.max(1, Math.floor(ms / 6e4)) + ' 分钟后';
 }
 function lastRunSummary(t) {
   const r = S.runs && S.runs[t.id] && S.runs[t.id][0]; if (!r) return '<span class="muted">—</span>';
@@ -221,55 +237,50 @@ function lastRunSummary(t) {
 function pageTasks() {
   const isAll = S.sub === 'all' && !S.filterStatus.length && !S.filterType.length && !S.q;
   let list = filteredTasks();
-  const nextT = S.tasks.filter((t) => t.status === 'active' && t.next_run_at).sort((a, b) => a.next_run_at - b.next_run_at)[0];
+  const actives = list.filter((t) => t.status === 'active');
+  const soonest = actives.filter((t) => t.next_run_at).sort((a, b) => a.next_run_at - b.next_run_at)[0];
   const stats = isAll ? `
     <div class="stats">
-      <div class="stat next"><div class="k">下一次运行</div><div class="v countdown" data-at="${nextT ? nextT.next_run_at : ''}"></div><div class="s">${esc(nextT ? nextT.title : '—')}</div></div>
-      <div class="stat"><div class="k">已排程</div><div class="v">${countBy((t)=>t.status==='active')}</div><div class="s"><a data-filter="active">查看</a></div></div>
-      <div class="stat"><div class="k">需要处理</div><div class="v">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s"><a data-filter="needs_attention">查看</a></div></div>
-      <div class="stat"><div class="k">待补全</div><div class="v">${countBy((t)=>t.status==='inactive')}</div><div class="s"><a data-nav="setup">去补全</a></div></div>
+      <div class="stat next"><div class="k">${ic('clock','sm')} 下一次运行</div><div class="v countdown" data-at="${soonest ? soonest.next_run_at : ''}">${soonest ? fmtNextText(soonest.next_run_at, soonest.timezone) : '—'}</div><div class="s">${soonest ? esc(soonest.title) : '暂无已排程任务'}</div></div>
+      <button class="stat" data-filter="active"><div class="k"><span class="dot" style="color:var(--ok);width:6px;height:6px"></span> 已排程</div><div class="v">${actives.length}</div><div class="s">查看</div></button>
+      <button class="stat" data-filter="needs_attention"><div class="k"><span class="dot" style="color:var(--err);width:6px;height:6px"></span> 需要处理</div><div class="v" style="color:${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')?'var(--err)':''}">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s">查看</div></button>
+      <button class="stat" data-nav="setup"><div class="k"><span class="dot" style="color:var(--warn);width:6px;height:6px"></span> 待补全</div><div class="v" style="color:${countBy((t)=>t.status==='inactive')?'var(--warn)':''}">${countBy((t)=>t.status==='inactive')}</div><div class="s">去补全</div></button>
     </div>` : '';
-  const chips = [...S.filterStatus.map((s)=>`<span class="chip" data-rm-s="${s}">${STATUS_L[s]} ×</span>`), ...S.filterType.map((t)=>`<span class="chip" data-rm-t="${t}">${(TYPE_LABEL[t]||'').split(' ')[0]} ×</span>`)];
+  const chips = [...S.filterStatus.map((s2)=>`<button class="chip" aria-pressed="true" data-rm-s="${s2}">${STATUS_L[s2]} ${ic('x','sm')}</button>`), ...S.filterType.map((t)=>`<button class="chip" aria-pressed="true" data-rm-t="${t}">${(TYPE_LABEL[t]||'').split(' ')[0]} ${ic('x','sm')}</button>`)];
   const toolbar = `
     <div class="toolbar">
-      <div class="row" style="gap:6px">
-        <button class="btn ghost sm" data-menu="fs">状态</button>
-        <button class="btn ghost sm" data-menu="ft">类型</button>
-        ${chips.length ? chips.join('') + `<button class="btn ghost sm" data-clear="1">清除筛选</button>` : ''}
-      </div>
+      <button class="fbtn ${S.filterStatus.length?'on':''}" data-menu="fs">${ic('filter','sm')} 状态${S.filterStatus.length?` · ${S.filterStatus.length}`:''}</button>
+      <button class="fbtn ${S.filterType.length?'on':''}" data-menu="ft">${ic('layers','sm')} 类型${S.filterType.length?` · ${S.filterType.length}`:''}</button>
+      ${chips.length ? chips.join('') + `<button class="btn ghost sm" data-clear="1">清除筛选</button>` : ''}
       <span class="spacer"></span>
-      ${S.sub.startsWith('tag:') && !S.sub.startsWith('tag:new') ? `<button class="btn ghost sm" id="btnShare">分享整包</button>` : ''}
-      <div class="seg" id="listSeg"><button class="seg-b ${S.viewMode!=="week"?"on":""}" data-seg="list">列表</button><button class="seg-b ${S.viewMode==="week"?"on":""}" data-seg="week">未来 7 天</button></div>
+      ${S.sub.startsWith('tag:') && !S.sub.startsWith('tag:new') ? `<button class="btn sm" id="btnShare">${ic('share','sm')} 分享整包</button>` : ''}
+      <span class="seg" role="group" aria-label="视图" id="listSeg"><span class="thumb"></span>
+        <button data-seg="list" aria-pressed="${S.viewMode!=='week'}">列表</button>
+        <button data-seg="week" aria-pressed="${S.viewMode==='week'}">未来 7 天</button></span>
     </div>`;
-  // 分组排序（L3）
-  const groups = [
-    ['需要你处理', (t) => ['needs_attention','pending_review'].includes(t.status)],
-    ['已排程', (t) => t.status === 'active'],
-    ['暂停与草稿', (t) => ['paused','draft','inactive'].includes(t.status)],
-    ['已完成', (t) => t.status === 'completed'],
-  ];
   let body = '';
-  if (S.sub === 'archived') {
-    // BUG-46: the archive view — identity and run history preserved
-    const items = (S.archived || []).slice().sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-    body = items.length
-      ? `<div class="group-h"><span>已归档</span><span class="count">${items.length}</span></div>` + items.map(rowHTML).join('')
-      : '<div class="empty"><div class="e-t">没有归档的任务</div><div class="e-s">删除的任务会先进入归档，可恢复或彻底删除。</div></div>';
-  }
-  for (const [g, f] of groups) {
-    if (S.sub === 'archived') break;
-    const items = list.filter(f).sort((a, b) => (a.next_run_at || 9e15) - (b.next_run_at || 9e15));
-    if (!items.length) continue;
-    body += `<div class="group-h"><span>${g}</span><span class="count">${items.length}</span></div>` + items.map(rowHTML).join('');
-  }
-  if (!body) body = emptyState();
   if (S.viewMode === 'week') {
-    $('#view').innerHTML = stats + toolbar + weekHTML(list);
+    body = weekHTML(list);
+  } else if (S.sub === 'archived') {
+    const items = (S.archived || []).slice().sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    body = items.length ? groupBlock('已归档', items) : '<div class="empty"><h3>没有归档的任务</h3><p>删除的任务会先进入归档，可恢复或彻底删除。</p></div>';
   } else {
-    $('#view').innerHTML = stats + toolbar + body;
+    const groups = [
+      ['需要你处理', (t) => ['needs_attention','pending_review'].includes(t.status), '失败 / 待核实 / 待审核'],
+      ['已排程', (t) => t.status === 'active', null],
+      ['暂停与草稿', (t) => ['paused','draft','inactive'].includes(t.status), '恢复后从下一个计划时间继续'],
+      ['已完成', (t) => t.status === 'completed', null],
+    ];
+    for (const [g, f, hint] of groups) {
+      const items = list.filter(f).sort((a, b) => (a.next_run_at || 9e15) - (b.next_run_at || 9e15));
+      if (items.length) body += groupBlock(`${g}${hint?`<span class="muted" style="font-weight:400">· ${hint}</span>`:''}`, items);
+    }
+    if (!body) body = emptyState();
   }
-  $$('#listSeg .seg-b').forEach((b) => b.classList.toggle('on', b.dataset.seg === (S.viewMode || 'list')));
+  $('#view').innerHTML = `<div class="view-inner">${stats + toolbar + body}</div>`;
+  positionSeg($('#listSeg'));
 }
+function groupBlock(title, items) { return `<div class="group-h">${title}<span class="n">${items.length}</span></div><div class="list" role="list">${items.map(rowHTML).join('')}</div>`; }
 function hypotheticalNext(t) {
   // BUG-32: a paused task keeps no next_run_at — compute where it WOULD run
   const s = taskSpec(t); if (!s || !s.kind) return null;
@@ -332,10 +343,10 @@ async function openDrawer(id) {
 }
 function closeDrawer() { DETAIL = null; renderDrawer(); }
 function drawerHTML() {
-  const t = DETAIL.task, s = taskSpec(t);
+  const t = DETAIL.task, sp = taskSpec(t);
   const alert = ({
-    needs_attention: `<div class="alert warn"><b>需要处理</b>：请查看下方运行记录中的失败原因并重试。</div>`,
-    pending_review: `<div class="alert info"><b>等待审核</b>：这条任务需要你确认后才会发出。</div>`,
+    needs_attention: `<div class="alert warn">${ic('alert')}<div><b>需要处理</b>：请查看下方运行记录中的失败原因并重试。</div></div>`,
+    pending_review: `<div class="alert info">${ic('info')}<div><b>等待审核</b>：这条任务需要你确认后才会发出。</div></div>`,
   })[t.status] || '';
   const EV_L = { queued:'排队', leased:'执行中', dispatched:'已投递', succeeded:'成功', failed:'失败', needs_attention:'需处理', cancelled:'已取消' };
   const PUB_L = { published:'published', publish_paused:'paused', publish_skipped:'skipped', publish_pending:'pending' };
@@ -352,52 +363,83 @@ function drawerHTML() {
   }
   function runHTML(r) {
     const res = safeParse(r.result || '{}');
-    let h = '<div class="run-item"><div class="row"><span class="mono">' + fmtDT(r.scheduled_for) + '</span>';
-    h += '<span class="pill ' + (r.status || '') + '">' + esc(STATUS_L[r.status] || r.status) + '</span></div>';
-    if (res.summaryForOwner) h += '<div class="muted">' + esc(res.summaryForOwner) + '</div>';
-    if (r.error) h += '<div style="color:var(--err)">' + esc(typeof r.error === 'string' ? r.error : JSON.stringify(r.error)) + '</div>';
-    h += '<div class="row" style="gap:6px;margin-top:6px">' + evHTML(r);
-    if (r.status === 'needs_attention') h += '<button class="btn sm" data-run="resend:' + r.id + '">重试（下游幂等）</button><button class="btn ghost sm" data-run="skip:' + r.id + '">跳过</button>';
-    if (r.publish_status === 'publish_paused') h += '<button class="btn sm" data-run="pubretry:' + r.id + '">仅重试发布（不重跑任务）</button>';
-    h += '<button class="btn ghost sm" data-chain="' + r.occ_key + '">查看此轮追问链</button>';
+    let h = `<div class="run-item"><div class="row" style="justify-content:space-between"><span class="mono" style="font-size:12px">${fmtDT(r.scheduled_for)}</span><span class="pill ${r.status || ''}">${esc(STATUS_L[r.status] || r.status)}</span></div>`;
+    if (res.summaryForOwner) h += `<div class="muted" style="font-size:12px">${esc(res.summaryForOwner)}</div>`;
+    if (r.error) h += `<div style="color:var(--err);font-size:12px">${esc(typeof r.error === 'string' ? r.error : JSON.stringify(r.error))}</div>`;
+    h += `<div class="row" style="gap:6px;margin-top:6px">${evHTML(r)}`;
+    if (r.status === 'needs_attention') h += `<button class="btn sm" data-run="resend:${r.id}">重试（下游幂等）</button><button class="btn ghost sm" data-run="skip:${r.id}">跳过</button>`;
+    if (r.publish_status === 'publish_paused') h += `<button class="btn sm" data-run="pubretry:${r.id}">仅重试发布（不重跑任务）</button>`;
+    h += `<button class="btn ghost sm" data-chain="${r.occ_key}">查看此轮追问链</button>`;
     h += '</div></div>';
     return h;
   }
-  const runsHTML = DETAIL.runs.map(runHTML).join('') || '<div class="empty" style="padding:18px">还没有运行记录</div>';
+  const runsHTML = DETAIL.runs.map(runHTML).join('') || '<div class="empty" style="padding:24px"><h3>还没有运行记录</h3></div>';
+  const tabs = [['overview','概览'], ...(t.type==='outreach'?[['chain','追问链']]:[]), ['runs', `运行记录<span class="n">${DETAIL.runs.length}</span>`]];
+  const canPause = t.status === 'active', canEnable = ['paused','draft','inactive','completed'].includes(t.status);
+  const archived = t.status === 'archived';
+  const tagsHTML = (t.tags||[]).map((g)=>`<button class="tag" data-rmtag="${g.id}" title="移除此 Tag"><span class="tag-dot" style="background:${g.color}"></span>${esc(g.name)} ${ic('x','sm')}</button>`).join('');
+  const kv = (dt, dd) => `<dt>${dt}</dt><dd>${dd}</dd>`;
+  const n = t.next_run_at;
+  const nx = ['active','paused'].includes(t.status) ? nextRunsOf(t, 4) : [];
+  const tz = (t.timezone || sp?.timezone || 'Asia/Shanghai');
   return `
-  <div class="drawer-b">
-    <div class="dhead">${typeIc(t.type, true)}<div class="grow"><div class="row" style="gap:8px"><b>${esc(t.title)}</b><span class="pill ${t.status}">${STATUS_L[t.status]||t.status}</span></div>
-      <div class="muted">${esc(TYPE_LABEL[t.type]||t.type)} · ${esc({web:'Web 创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管',local:'Web 创建'}[t.origin||'web']||'Web 创建')} · rev ${t.revision||1}</div></div>
-      <button class="btn ghost icon" data-act="closeDrawer" aria-label="关闭">${ic('close')}</button></div>
-    <div class="dtabs" role="tablist"><button role="tab" data-dtab="overview" class="${DETAIL.tab==='overview'?'on':''}">概览</button>${t.type==='outreach'?'<button role="tab" data-dtab="chain">追问链</button>':''}<button role="tab" data-dtab="runs" class="${DETAIL.tab==='runs'?'on':''}">运行记录 (${DETAIL.runs.length})</button></div>
+  <div class="drawer-h">
+    ${typeIc(t.type, true)}
+    <div class="grow">
+      <div class="row" style="gap:8px;margin-bottom:6px">${statusPill(t.status)}<span class="muted" style="font-size:12px">${esc(TYPE_LABEL[t.type]||t.type)}</span><span class="src">${{web:'Web 创建',glip:'Glip',import:'分享导入',jira:'JIRA',local:'Web 创建'}[t.origin||'web']} · rev ${t.revision||1}</span></div>
+      <h2 id="drawerTitle">${esc(t.title)}</h2>
+    </div>
+    <button class="btn ghost icon" data-act="closeDrawer" aria-label="关闭">${ic('x')}</button>
+  </div>
+  <div class="drawer-b scroll">
+    <div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" aria-selected="${DETAIL.tab===k}" data-dtab="${k}">${l}</button>`).join('')}</div>
     ${DETAIL.tab === 'overview' ? `
       ${alert}
-      <div class="content-box"><div class="cb-h">计划</div>
-        <div class="kv"><span>规则</span><span>${esc(specText(t))}</span></div>
-        ${t.next_run_at?`<div class="kv"><span>下一次运行</span><span class="mono countdown" data-at="${t.next_run_at}"></span></div>`:''}
-        ${['active','paused'].includes(t.status) && nextRunsOf(t, 3).length > 1 ? `<div class="kv"><span>后续运行</span><span class="mono" style="font-size:12px">${nextRunsOf(t, 3).slice(1).map((a) => fmtDT(a, t.timezone)).join('<br>')}</span></div>` : ''}
-        ${s.kind==='timeline'?`<div class="kv"><span>版本信息</span><span>${esc((S.timeline.find(p=>p.id===s.project)||{}).currentRelease||'—')} · 刷新时间 ${((S.timeline.find(p=>p.id===s.project)||{}).fetchedAt? new Date(((S.timeline.find(p=>p.id===p)||{}).fetchedAt||0)*1000).toLocaleString():'—')}</span></div>`:''}
-        <div class="kv"><span>时区</span><span>${esc(tzLabel(t.timezone || s.timezone || 'Asia/Shanghai'))} <span class="muted">（规则与后续运行均按此时区显示）</span></span></div>
-        <div class="kv"><span>时间源</span><span class="muted">Schedule Service（单一调度器）</span></div></div>
-      <div class="content-box"><div class="cb-h">内容与对象</div>
-        ${t.content?`<div class="kv"><span>内容</span><span>${esc(t.content)}</span></div>`:''}
-        <div class="kv"><span>对象</span><span>${esc(recipientsText(t)||'未设置')}</span></div>
-        ${t.type==='agent_task'?`<div class="kv"><span>运行通知</span><span>${{every:'每次完成',failures:'仅失败',off:'关闭'}[t.notify?.notifyMe?.mode||'every']}</span></div><div class="kv"><span>发布产出</span><span>${t.notify?.publish?.enabled?esc(t.notify.publish.source==='template'?'按模板':'直接发送'):'关闭'}</span></div>`:''}
+      <div class="section">
+        <h4>${ic('clock','sm')} 计划</h4>
+        ${n ? `<div class="countdown"><div><div class="big countdown" data-at="${n}">${relText(n)}</div><div class="when">下次 ${fmtNextText(n, tz)} · ${tzLabel(tz)}</div></div></div>
+          <div class="nextlist">${nx.slice(1).map((d)=>`<div><span class="mono">${fmtDT(d, tz)}</span><span class="muted">${relText(d)}</span></div>`).join('')}</div>`
+        : `<div class="content-box" style="color:var(--text-3)">${t.status==='paused'?'已暂停：未来不会触发。恢复后从下一个计划时间继续，不会补发暂停期间的运行。':t.status==='inactive'?'未启用：补全配置并手动启用后才会进入调度。':t.status==='draft'?'草稿：保存并排程后进入调度。':t.status==='archived'?'已归档：可恢复或彻底删除。':'—'}</div>`}
+        <dl class="kv" style="margin-top:16px">
+          ${kv('规则', esc(specText(t)))}
+          ${sp?.kind === 'timeline' ? (() => { const proj = S.timeline.find((p2)=>p2.id===sp.project) || {}; const ms = (proj.milestones||[]).find((m)=>m.name===sp.milestone); return kv('Timeline', `${esc(sp.project)} ${esc(proj.currentRelease||'—')} · ${esc(sp.milestone)} ${ms?.date ? ms.date.slice(5).replace('-','/') : '日期未出'} · ${offText(sp.offsetDays||0)}<div class="muted" style="font-size:12px">Release Info 接口 · 版本切换后自动重算</div>`); })() : ''}
+          ${kv('时区', `${esc(tzLabel(tz))} <span class="muted" style="font-weight:400">（规则与后续运行均按此时区显示）</span>`)}
+          ${kv('时间源', 'Schedule Service <span class="muted">· 单一调度器</span>')}
+        </dl>
       </div>
-      <div class="content-box"><div class="cb-h">Tag</div><div class="row">${(t.tags||[]).map((g)=>`<span class="tag" data-rmtag="${g.id}" style="--tc:${g.color}">#${esc(g.name)} ×</span>`).join('')||'<span class="muted">未分组</span>'} <button class="btn ghost sm" data-addtag>＋ 添加 Tag</button></div></div>
-      <div class="content-box"><div class="cb-h">来源</div><div class="kv"><span>创建方式</span><span>${{web:'Web 手动创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管',local:'Web 手动创建'}[t.origin||'web']||'Web 手动创建'}</span></div><div class="kv"><span>创建时间</span><span>${fmtDT(t.created_at)}</span></div></div>` : ''}
+      <div class="section">
+        <h4>${typeIc(t.type,'sm')} 内容与对象</h4>
+        ${t.content?`<div class="content-box" style="white-space:pre-wrap">${esc(t.content)}</div>`:''}
+        <dl class="kv" style="margin-top:16px">
+          ${kv('对象', esc(recipientsText(t)||'未设置'))}
+          ${t.type==='agent_task'?kv('运行通知', {every:'每次完成',failures:'仅失败',off:'关闭'}[t.notify?.notifyMe?.mode||'every']) + kv('发布产出', t.notify?.publish?.enabled ? esc(t.notify.publish.source==='template'?'按模板生成':'直接发送最终产出') : '关闭'):''}
+          ${t.type==='asme'?kv('发送身份', '以我的身份（RC 个人授权）'):''}
+          ${t.type==='bot'?kv('发送身份', 'Bot 身份'):''}
+        </dl>
+      </div>
+      <div class="section">
+        <h4>${ic('tag','sm')} Tag <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">· 可属于多个分组</span></h4>
+        <div class="row" style="gap:6px;flex-wrap:wrap">${tagsHTML||'<span class="muted">未分组</span>'}<button class="chip" data-addtag>${ic('plus','sm')} 添加 Tag</button></div>
+      </div>
+      <div class="section">
+        <h4>${ic('info','sm')} 来源</h4>
+        <dl class="kv">${kv('创建方式', {web:'Web 手动创建',glip:'Glip 定时发送',import:'分享导入',jira:'JIRA 托管',local:'Web 手动创建'}[t.origin||'web']||'Web 手动创建')}${kv('创建时间', fmtDT(t.created_at))}</dl>
+      </div>` : ''}
     ${DETAIL.tab === 'runs' ? runsHTML : ''}
     ${DETAIL.tab === 'chain' ? '<div id="chainBox">追问链加载中…</div>' : ''}
-    <div class="dfoot">
-      ${t.status==='archived'
-        ? `<button class="btn primary" data-op="restore">恢复（暂停状态）</button><button class="btn danger ghost" data-op="purge">彻底删除</button>`
-        : `${t.status==='active'?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
-      ${['paused','draft','inactive','completed'].includes(t.status)?`<button class="btn primary" data-op="enable">${t.status==='draft'?'检查并排程':'启用'} <kbd>P</kbd></button>`:''}
-      <button class="btn ghost" data-op="edit">编辑 <kbd>E</kbd></button>
-      <button class="btn ghost" data-op="copy">复制</button>
-      <button class="btn danger ghost" data-op="delete">删除</button>`}
-    </div></div>`;
+  </div>
+  <div class="drawer-f">
+    ${archived
+      ? `<span class="muted">已归档 · 保留任务身份与执行记录</span><span class="spacer"></span><button class="btn primary" data-op="restore">恢复（暂停状态）</button><button class="btn danger ghost" data-op="purge">彻底删除</button>`
+      : `${canPause?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
+        ${canEnable?`<button class="btn primary" data-op="enable">${t.status==='draft'?'检查并排程':'启用'} <kbd>P</kbd></button>`:''}
+        <span class="spacer"></span>
+        <button class="btn ghost" data-op="edit">编辑 <kbd>E</kbd></button>
+        <button class="btn ghost" data-op="copy">复制</button>
+        <button class="btn danger ghost" data-op="delete">删除</button>`}
+  </div>`;
 }
+function offText(off) { off = +off || 0; if (off === 0) return '当天'; return (off < 0 ? '前 ' : '后 ') + Math.abs(off) + ' 天'; }
 function renderDrawer() {
   const host = $('#layer');
   if (!host.dataset.ready) { host.innerHTML = '<div id="drawerLayer"></div><div id="modalLayer"></div>'; host.dataset.ready = 1; }
@@ -456,33 +498,57 @@ function doneModalHTML() {
 }
 function createModalHTML() {
   if (CF.done) return doneModalHTML();
-  const titles = stepTitles();
-  return `<div class="modal-wrap"><div class="scrim" data-act="cancelCf"></div><div class="modal create" role="dialog" aria-modal="true">
-    <div class="steps">${titles.map((t, i) => `<button class="step ${CF.step===i+1?'cur':''} ${CF.step>i+1?'done':''}" data-step="${i+1}"><span class="n">${i+1}</span>${t}</button>`).join('')}</div>
-    <div class="mbody"><div class="mhead"><h3 id="cfT">${CF.editing ? '编辑计划任务' : '新建计划任务'} · ${CF.type ? esc(TYPE_LABEL[CF.type]) : '选择类型'}<button class="btn ghost icon" data-act="cancelCf" aria-label="关闭">${ic('close')}</button></h3></div>
-    <div id="cfPane"></div>
-    <div class="mfoot"><span class="muted" id="cfDraftNote">${CF.step < 5 ? '草稿已自动保存' : ''}</span><span class="spacer"></span>
-      ${CF.step > 1 ? '<button class="btn ghost" data-prev>上一步</button>' : ''}
-      ${CF.step < 5 ? `<button class="btn primary" data-next>继续 <kbd>⌘↵</kbd></button>` : ''}${`<button class="btn primary" data-finish>${CF.editing ? '保存修改' : '保存并排程'}</button>`}<button class="btn ghost" data-savedraft>存为草稿</button>
-    </div></div></div>`;
+  const edit = Boolean(CF.editing);
+  const stepLabel = (i) => i === 2 && CF.type === 'agent_task' ? '执行与投递' : stepTitles()[i];
+  const stepValue = (i) => {
+    if (i === 0) return CF.type ? TYPE_LABEL[CF.type].split(' ')[0] : '未选';
+    if (i === 1) return (CF.title || CF.content || '').slice(0, 12) || '待填';
+    if (i === 2) return (CF.recipients.map((r) => r.name || r.raw || '未解析').slice(0, 4).join('、')) || (CF.type === 'agent_task' ? '默认执行器' : '待设置');
+    if (i === 3) return CF.time ? ({ daily:'每天', weekdays:'工作日', weekly:'每周', monthly:'每月', once:'一次', timeline:'Timeline', rate:'间隔' }[CF.time.freq] || '每天') : '每天';
+    return '核对后保存';
+  };
+  const steps = stepTitles().map((t, i) => { const done = i < CF.step - 1;
+    return `<button class="step ${CF.step===i+1?'cur':''} ${done?'done':''}" data-step="${i+1}" ${(edit && i === 0) ? 'disabled' : ''}>
+      <span class="n">${done?ic('check','sm'):i+1}</span><span style="min-width:0">${stepLabel(i)}<span class="v">${esc(stepValue(i))}</span></span></button>`; }).join('');
+  return `<div class="modal-wrap"><div class="scrim" data-act="cancelCf"></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cfHead">
+    <aside class="steps"><div class="ttl">${edit?'编辑任务':'新建计划任务'}</div><div class="sub">${edit?'类型不可修改；改类型请新建':'每步一件事，随时可回退'}</div>${steps}
+      <div class="foot">${CF.lastDraftId||CF.editing?'<span class="saved-dot"></span> 草稿已自动保存':'可先存草稿，再回来补全'}</div></aside>
+    <section class="mbody">
+      <div class="mhead"><h3 id="cfHead">${stepLabel(CF.step - 1)}</h3><span class="pill ghost">${CF.step} / 5</span><span class="grow"></span>
+        ${CF.type?`<span class="pill">${typeIc(CF.type,'sm')} ${esc(TYPE_LABEL[CF.type].split(' ')[0])}</span>`:''}
+        <button class="btn ghost icon" data-act="cancelCf" aria-label="关闭（Esc）">${ic('x')}</button></div>
+      <div class="mcontent scroll" id="cfPane"></div>
+      <div class="mfoot" id="cfFoot">
+        ${CF.step > 1 && !(edit && CF.step === 2) ? '<button class="btn ghost" data-prev>‹ 上一步</button>' : ''}
+        <span class="spacer"></span>
+        ${CF.step === 5 && !edit ? '<button class="btn" data-savedraft>存为草稿</button>' : ''}
+        <button class="btn primary" data-next style="${CF.step===5?'display:none':''}">继续 <kbd>⌘↵</kbd></button>
+        <button class="btn primary" data-finish style="${CF.step===5?'':'display:none'}">${edit?'保存修改':'保存并排程'}</button>
+      </div>
+    </section>
+  </div></div>`;
 }
 function renderCfPane() {
   const pane = $('#cfPane'); if (!pane || CF.done) return;
-  // every re-render re-binds: picker picks, chip removals and mode switches
-  // replace the DOM, and the old bindings died with it
-  if (CF.step === 1) { pane.innerHTML = cfStep1(); $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); }); }
-  if (CF.step === 2) pane.innerHTML = cfStep2();
-  if (CF.step === 3) pane.innerHTML = cfStep3();
-  if (CF.step === 4) pane.innerHTML = cfStep4();
-  if (CF.step === 5) pane.innerHTML = cfStep5();
+  pane.innerHTML = `<div class="step-pane">${CF.step === 1 ? cfStep1() : CF.step === 2 ? cfStep2() : CF.step === 3 ? cfStep3() : CF.step === 4 ? cfStep4() : cfStep5()}</div>`;
+  if (CF.step === 1) $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); });
   wireCfPane();
 }
 function cfStep1() {
-  const chips = ['每天 9:00 提醒我站会', '每周五 17:00 给 #平台周会 发周报', '帮我问 Eason 本周五前确认发布时间', '每天 10:00 查询阻塞工单并发到 #值班群'];
-  return `<div class="field"><label for="cfOne">一句话创建</label><input class="input" id="cfOne" placeholder="例如：每周一 10:00 提醒 #平台周会 发布检查" value="${esc(CF.oneLine)}">
-    <div class="row" style="margin-top:6px;gap:6px">${chips.map((c)=>`<button class="chip" data-demo="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-    <div class="field" style="margin-top:18px"><span class="label">或者选择类型</span>
-    <div class="type-grid">${TYPE_ORDER.map((k, i) => `<button class="choice" data-pick="${k}"><span class="k">${i+1}</span>${typeIc(k, true)}<div><b>${esc(TYPE_LABEL[k].split(' ')[0])}</b><div class="muted">${esc(TYPE_LABEL[k])}</div><div class="d muted">${esc(TYPE_DESC[k] || '')}</div></div></button>`).join('')}</div></div>`;
+  const chips = ['每天 9:00 提醒我站会', '每周五 17:00 给 #平台周会 发周报', '帮我问 Eason 本周五前确认发布时间', '每天 10:00 查询阻塞工单并发到 #值班群', 'mThor FF 前 1 天 10:00 提醒冻结', '每周五 10:00 帮我做 依赖漏洞巡检'];
+  return `<div class="nl"><span style="color:var(--primary);display:flex">${ic('sparkle')}</span>
+    <label class="sr-only" for="cfOne">一句话创建</label>
+    <input id="cfOne" placeholder="一句话描述，或按 1–5 直接选类型" value="${esc(CF.oneLine)}" autocomplete="off">
+    <button class="btn primary" data-parse>${ic('arrowR','sm')} 识别</button></div>
+    <div class="nl-sug">${chips.map((c)=>`<button class="chip" data-demo="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    <div class="group-h" style="padding-top:0">或者选择类型 <span class="n">按 1–5</span></div>
+    <div class="typegrid" role="radiogroup" aria-label="任务类型">
+      ${TYPE_ORDER.map((k, i) => { const bad = (k === 'outreach' || k === 'agent_task') && connStateOf('memory') !== 'ok';
+        return `<button class="typecard" role="radio" style="--c:var(--t-${k==='ai_report'?'report':(k==='agent_task'?'agent':(k==='jira_automation'?'report':k))})" aria-pressed="${CF.type===k}" data-pick="${k}">
+        <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_LABEL[k].split(' ')[0])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
+        <div class="req">${bad?ic('alert','sm')+' 未连接 Memory：可创建，保存为未启用':ic('check','sm')}</div></button>`; }).join('')}
+    </div>`;
 }
 async function tryOneLine(text) {
   // 规则解析（C3 验收允许规则实现，但识别不出的项标待确认）
@@ -666,70 +732,92 @@ const PRESETS4 = [
   ['每小时', { freq: 'rate', rate: 60 }],
   ['每周一 9:00', { freq: 'weekly', dow: 1, at: '09:00' }],
   ['工作日 9:00', { freq: 'weekdays', at: '09:00' }],
+  ['mThor FF 前 1 天 10:00', { freq: 'timeline', project: 'mThor', milestone: 'FF', off: -1, at: '10:00' }],
+  ['每月 15 日 9:00', { freq: 'monthly', dom: 15, at: '09:00' }],
 ];
-function cfStep4() {
-  const t = CF.time || defaultTime();
-  const seg = [['once','一次'],['daily','每天'],['weekdays','工作日'],['weekly','每周'],['monthly','每月'],['timeline','Timeline']];
-  return `<div class="field"><span class="label">常用</span><div class="row" style="gap:6px">${PRESETS4.map(([l],i)=>`<button class="chip" data-preset="${i}">${l}</button>`).join('')}</div>
-  <div class="field" style="margin-top:12px"><span class="label">频率</span><div class="seg" id="freqSeg">${seg.map(([k,l])=>`<button class="seg-b" data-fq="${k}">${l}</button>`).join('')}</div></div>
-  <div class="grid2">
-    <div class="field" id="fOnce" style="display:none"><label>日期与时间</label><input class="input" type="datetime-local" id="fWhen" value="${esc(t.when || '')}"></div>
-    <div class="field" id="fAt" style="display:none"><label>时刻</label><input class="input" type="time" id="fTime" value="${esc(t.at)}"></div>
-    <div class="field" id="fRate" style="display:none"><label>间隔（分钟）</label><input class="input" type="number" id="fRate" value="${+t.rate || 60}"></div>
-    <div class="field" id="fWeek" style="display:none"><label>每周几</label><select class="input" id="fDow">${'一二三四五六日'.split('').map((d,i)=>`<option value="${i+1}" ${+t.dow===i+1?'selected':''}>周${d}</option>`).join('')}</select></div>
-    <div class="field" id="fMonth" style="display:none"><label>每月几日</label><select class="input" id="fDom">${Array.from({length:28},(_,i)=>`<option value="${i+1}" ${+t.dom===i+1?'selected':''}>${i+1} 日</option>`).join('')}</select></div>
-    <div class="field" id="fTL" style="display:none"><label>项目</label><select class="input" id="fProject"><option value="" disabled>（暂无数据）</option>${S.timeline.map((p)=>`<option value="${esc(p.id)}">${esc(p.name)}${p.currentRelease?' · '+esc(p.currentRelease):''}${p.currentRelease?'':'（暂无数据）'}</option>`).join('')}</select></div>
-    <div class="field" id="fTL2" style="display:none"><label>里程碑</label><select class="input" id="fMile"></select></div>
-    <div class="field" id="fTL3" style="display:none"><label>偏移（天）</label><div class="row"><button class="btn ghost sm" data-off="-">−</button><input class="input mono" id="fOff" type="number" value="${+t.off || 0}" style="width:70px"><button class="btn ghost sm" data-off="+">＋</button></div></div>
-    <div class="field" id="fTL4" style="display:none"><label>时刻</label><input class="input" type="time" id="fTimeTL" value="${esc(t.at)}"></div>
-    <div class="field"><label>时区</label><select class="input" id="fTz">${TIMEZONES.map(([id, name])=>`<option value="${id}" ${t.tz===id?'selected':''}>${name} · ${tzOffsetLabel(id)}</option>`).join('')}</select></div>
-  </div>
-  <div class="content-box" style="margin-top:10px"><div class="cb-h">预览</div><div id="cfNextPrev" class="muted"></div></div>`;
-}
+const KINDS4 = [['once','一次'],['daily','每天'],['weekdays','工作日'],['weekly','每周'],['monthly','每月'],['timeline','Timeline']];
 // BUG-62: stable Chinese names + a COMPUTED offset (DST-aware) — the old
 // static labels showed no offset for 3 of 5 zones
 const TIMEZONES = [['Asia/Shanghai','上海'],['UTC','UTC'],['Europe/London','伦敦'],['America/New_York','纽约'],['America/Los_Angeles','洛杉矶']];
+function cfStep4() {
+  const t = CF.time || defaultTime();
+  return `<div class="grid-2" style="grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:24px">
+    <div>
+      <div class="field"><span class="label">常用</span><div class="row wrap">${PRESETS4.map(([l],i)=>`<button class="chip" data-preset="${i}">${l}</button>`).join('')}</div></div>
+      <div class="field"><span class="label">频率</span><span class="seg" role="group" aria-label="频率" id="freqSeg"><span class="thumb"></span>${KINDS4.map(([k,l])=>`<button aria-pressed="${t.freq===k}" data-fq="${k}">${l}</button>`).join('')}</span></div>
+      ${t.freq==='timeline'?tlFieldsHTML(t):''}
+      ${t.freq==='monthly'?`<div class="field"><label for="fDom">每月几号</label><select class="select" id="fDom" style="max-width:160px">${Array.from({length:28},(_,i)=>`<option value="${i+1}" ${+t.dom===i+1?'selected':''}>${i+1} 日</option>`).join('')}</select><span class="hint">为避免月份天数差异，最多到 28 日。</span></div>`:''}
+      ${t.freq==='weekly'?`<div class="field"><label for="fDow">每周几</label><select class="select" id="fDow" style="max-width:160px">${'一二三四五六日'.split('').map((d,i)=>`<option value="${i+1}" ${+t.dow===i+1?'selected':''}>周${d}</option>`).join('')}</select></div>`:''}
+      ${t.freq==='rate'?`<div class="field" style="max-width:260px"><label for="fRate">间隔（分钟）</label><input class="input mono" type="number" id="fRate" value="${+t.rate || 60}"></div>`:''}
+      <div class="row" style="gap:16px;align-items:flex-start">
+        ${t.freq==='once'?`<div class="field grow"><label for="fWhen">日期</label><input class="input mono" type="datetime-local" id="fWhen" value="${esc(t.when || '')}"></div>`:''}
+        <div class="field grow"><label for="fTime">时间</label><input class="input mono" type="time" id="fTime" value="${esc(t.at)}" step="300"></div>
+      </div>
+      <div class="field"><label for="fTz">时区</label><select class="select" id="fTz">${TIMEZONES.map(([id, name])=>`<option value="${id}" ${t.tz===id?'selected':''}>${name} · ${tzOffsetLabel(id)}</option>`).join('')}</select><span class="hint">按此时区的墙上时间触发，夏令时自动处理。</span></div>
+    </div>
+    <div><div class="preview-run" id="timePrevWrap" aria-live="polite">${timePreviewHTML()}</div></div>
+  </div>`;
+}
+function tlFieldsHTML(t) {
+  const proj = S.timeline.find((p) => p.id === t.project);
+  const milestones = (proj?.milestones || []);
+  return `<div class="field"><label for="fProject">项目</label><select class="select" id="fProject">${S.timeline.map((p)=>`<option value="${esc(p.id)}" ${t.project===p.id?'selected':''}>${esc(p.name)}${p.currentRelease?'（当前版本 '+esc(p.currentRelease)+'）':'（暂无数据）'}</option>`).join('')}</select></div>
+    <div class="field"><label for="fMile">里程碑 <span class="muted" style="font-weight:400">· ${proj?.currentRelease?'当前版本 '+esc(proj.currentRelease):'该项目暂无版本数据'}</span></label>
+      <select class="select" id="fMile">${milestones.length?milestones.map((m)=>`<option value="${esc(m.name)}" ${t.milestone===m.name?'selected':''} ${m.date?'':'disabled'}>${esc(m.name)}${m.date?' · '+m.date.slice(5).replace('-','/'):' ·（等待数据）'}</option>`).join(''):'<option value="" disabled>（暂无数据）</option>'}</select></div>
+    <div class="field"><span class="label">相对里程碑</span><div class="row">
+      <button class="btn icon" data-off="-" aria-label="提前一天">−</button>
+      <span class="mono" style="min-width:96px;text-align:center;font-size:15px">${offText(t.off)}</span>
+      <button class="btn icon" data-off="+" aria-label="推后一天">＋</button>
+      <span class="hint">范围 −30 ～ +30 天</span></div></div>`;
+}
+function timePreviewHTML() {
+  const s2 = currentSpec();
+  const tz = (s2 && s2.timezone) || (CF.time && CF.time.tz) || 'Asia/Shanghai';
+  if (!s2) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--warn)">待补全</div><div class="rel">时间规则还不完整——选择频率并填好时刻/日期。</div>`;
+  if (s2.kind === 'timeline') {
+    const proj = S.timeline.find((p) => p.id === s2.project);
+    const ms = (proj?.milestones || []).find((m) => m.name === s2.milestone);
+    const next = nextAtForTimeline(s2);
+    const src = `<div class="tz2" style="display:grid;gap:8px">
+      <div class="row" style="gap:6px">${ic('server','sm')}<span class="grow">Release Info 接口 · ${proj?.fetchedAt?relText(proj.fetchedAt)+'前刷新':'未取到数据'}</span></div>
+      <div class="row" style="gap:6px">${ic('info','sm')}版本切换后按新版本日期自动重算；同一「版本 + 里程碑」只执行一次。</div></div>`;
+    if (!ms || !ms.date) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--warn)">等待 ${esc(s2.milestone)} 日期</div><div class="rel">${esc(s2.project)} ${esc(proj?.currentRelease||'')} 还没有 ${esc(s2.milestone)} 日期，出现后自动排程。</div>${src}`;
+    const past = !next || next <= Math.floor(Date.now() / 1000);
+    return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
+      <div class="first" style="${past?'color:var(--text-3)':''}">${next?fmtNextText(next, tz):'本版本已过'}</div>
+      <div class="rel">${past?'这个版本的触发时间已过，下个版本发布日期出来后自动排程':relText(next)}</div>
+      <div class="rest"><div><span>${esc(s2.project)} ${esc(proj?.currentRelease||'')} · ${esc(s2.milestone)}</span><span>${ms.date.slice(5).replace('-','/')}</span></div><div><span>${offText(s2.offsetDays||0)}</span><span>${s2.time}</span></div></div>${src}`;
+  }
+  const list = nextRunsOf({ timezone: tz, status: 'active', next_run_at: null, scheduleSpec: s2, type: CF.type }, 4);
+  if (!list.length) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--err)">—</div><div class="rel">没有未来的运行时间</div>`;
+  return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
+    <div class="first">${fmtNextText(list[0], tz)}</div><div class="rel">${relText(list[0])} · ${esc(specText({ scheduleSpec: s2 }))}</div>
+    ${list.length>1?`<div class="rest">${list.slice(1).map((x)=>`<div><span>${fmtNextText(x, tz)}</span><span class="muted">${relText(x)}</span></div>`).join('')}</div>`:`<div class="rest"><div><span class="muted">一次性任务，运行后自动完成</span></div></div>`}`;
+}
 function cfStep5() {
   const spec = currentSpec();
   const unres = (CF.recipients || []).filter((r) => r.unresolved || !r.id);
-  const rows = [
-    ['标题', CF.title || '（自动生成）'],
-    ['类型', CF.type ? TYPE_LABEL[CF.type] : '待确认'],
-    ['内容', CF.content || (CF.type === 'outreach' ? (CF.config?.question || '') : '') || '待确认'],
-    ['对象', CF.recipients.length ? CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') : '待确认'],
-    ['规则', spec ? specText({ scheduleSpec: spec }) || '待确认' : '待确认'],
-    ['时区', (() => { const z = (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai'; const zh = (TIMEZONES.find(([id]) => id === z) || [])[1]; return (zh || z) + ' · ' + tzOffsetLabel(z); })()],
-  ];
-  const hlHTML = (() => {
-    // BUG-57: show WHAT the one-sentence parser recognized, highlighted
-    if (!CF.oneLine || !CF.highlights || !CF.highlights.length) return '';
-    let txt = CF.oneLine;
-    const marks = [];
-    for (const h of [...CF.highlights].sort((a, b) => b.text.length - a.text.length)) {
-      const i = txt.indexOf(h.text);
-      if (i === -1) continue;
-      marks.push({ start: i, end: i + h.text.length, label: h.label, text: h.text });
-      txt = txt.slice(0, i) + '\u0001'.repeat(h.text.length) + txt.slice(i + h.text.length);
-    }
-    if (!marks.length) return '';
-    marks.sort((a, b) => a.start - b.start);
-    let out = ''; let pos = 0;
-    for (const m of marks) { out += esc(CF.oneLine.slice(pos, m.start)) + `<mark class="hl" title="${esc(m.label)}">${esc(m.text)}</mark>`; pos = m.end; }
-    out += esc(CF.oneLine.slice(pos));
-    return `<div class="content-box"><div class="cb-h">一句话识别</div><div>${out}<div class="muted" style="margin-top:4px">${CF.highlights.map((h) => esc(h.label)).join(' · ')} 已识别，未识别的部分保留在标题/内容中。</div></div></div>`;
-  })();
-  return `${hlHTML}${rows.some(([,v])=>v==='待确认') ? '<div class="alert warn">以下项还需要确认：' + rows.filter(r=>r[1]==='待确认').map(r=>r[0]).join('、') + '</div>' : ''}
-    ${unres.length ? '<div class="alert warn">有未解析的收件人（原文已保留：' + unres.map((r) => esc(r.raw || r.name)).join('、') + '）——到「对象」步骤选择真实对象后才能保存。</div>' : ''}
-    <div class="content-box">${rows.map(([k,v])=>`<div class="kv"><span>${k}</span><span>${esc(v)} <button class="btn ghost sm" data-fix="${k}">修改</button></span></div>`).join('')}</div>
-    <div class="content-box"><div class="cb-h">Tag</div><div class="row">${S.tags.map((g)=>`<label class="check"><input type="checkbox" data-cftag="${g.id}" ${CF.tags.includes(g.id)?'checked':''}> #${esc(g.name)}</label>`).join('')||'<span class="muted">还没有 Tag</span>'} <button class="btn ghost sm" data-newtag-cf>＋ 新建</button></div></div>
+  const row = (label, val, i) => `<div class="rrow"><span class="k">${label}</span><span style="min-width:0">${val}</span><button class="btn ghost sm" data-fix="${label}">修改</button></div>`;
+  const n = spec ? nextRunsOf({ timezone: (CF.time && CF.time.tz) || 'Asia/Shanghai', status: 'active', next_run_at: null, scheduleSpec: spec, type: CF.type }, 1)[0] : null;
+  const tz = (CF.time && CF.time.tz) || (spec && spec.timezone) || 'Asia/Shanghai';
+  return `
+    ${CF.highlights && CF.highlights.length ? `<div class="nl-recog">${ic('sparkle','sm')} 已从一句话识别：${CF.highlights.map((h) => `<span class="pill lime">${esc(h.label)}</span>`).join('')}</div>` : ''}
+    ${unres.length ? `<div class="alert warn">${ic('alert')}<div>有未解析的收件人（原文已保留：${unres.map((r) => esc(r.raw || r.name)).join('、')}）——到「对象」步骤选择真实对象后才能排程。</div></div>` : ''}
+    <div class="review">
+      ${row('标题', `<input class="input" style="height:32px" id="cfTitle" value="${esc(CF.title || '')}" aria-label="标题">`, 1)}
+      ${row('类型', `<span class="row" style="gap:6px">${typeIc(CF.type)}${esc(TYPE_LABEL[CF.type]||'')}</span>`, 0)}
+      ${row('内容', `<div style="color:var(--text-2);white-space:pre-wrap;overflow-wrap:anywhere">${esc(CF.content || '—')}</div>`, 1)}
+      ${row('对象', esc(CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') || (CF.type === 'agent_task' ? '默认执行器（Memory Service）' : '待确认')), 2)}
+      ${row('时间', `<div>${esc(spec ? specText({ scheduleSpec: spec }) : '待确认')}</div><div class="mono" style="color:var(--primary);font-size:12px;margin-top:2px">${n ? `下次 ${fmtNextText(n, tz)} · ${relText(n)}` : '—'} · ${tzLabel(tz)}</div>`, 3)}
+    </div>
+    <div class="field" style="margin-top:24px"><span class="label">Tag <span class="muted" style="font-weight:400">· 可多选，任务只存一份</span></span>
+      <div class="row wrap">${S.tags.map((g)=>`<button class="chip" aria-pressed="${CF.tags.includes(g.id)}" data-cftag="${g.id}"><span class="tag-dot" style="background:${g.color||'#cdf26b'}"></span>${esc(g.name)}</button>`).join('')||'<span class="muted">还没有 Tag</span>'}<button class="chip" data-newtag-cf>${ic('plus','sm')} 新 Tag</button></div></div>
     ${CF.type === 'agent_task' ? `
-    <div class="content-box"><div class="cb-h">试运行（不会真实发送或执行）</div>
+    <div class="section" style="margin-top:24px"><h4>试运行（不会真实发送或执行）</h4>
       <div class="row" style="align-items:flex-start;gap:12px"><div class="trial-card"><b>发给你</b><div class="muted" id="trialMe">尚未生成</div></div><div class="trial-card"><b>发到群</b><div class="muted" id="trialGrp">尚未生成</div></div></div>
-      <div class="muted" style="margin-top:6px">write 模式任务不支持真实执行预览（H12）；发布预览仅展示形态，不发送任何消息。</div></div>` : ''}`;
+      <div class="muted" style="margin-top:6px;font-size:12px">write 模式任务不支持真实执行预览；发布预览仅展示形态，不发送任何消息。</div></div>` : ''}`;
 }
 
-
-/* ========================================================= 补全页 / 连接页 / 分享 */
 function pageSetup() {
   const items = S.tasks.filter((t) => t.status === 'inactive' || (t.missing && t.missing.length));
   const ready = items.filter((t) => !(t.missing || []).length).length;
@@ -917,8 +1005,8 @@ function wire() {
   $$('#view [data-new-type]').forEach((b) => b.onclick = () => newFlow(b.dataset.newType));
   $$('#view [data-new-tag]').forEach((b) => b.onclick = () => newFlow(null, { tags: [b.dataset.newTag] }));
   const bs = $('#btnShare'); if (bs) bs.onclick = () => openShareModal(S.sub.slice(4));
-  $$('#tagSeg .seg-b').forEach((b) => b.onclick = () => {
-    // BUG-31: the seg really switches the grouping mode
+  $$('#tagSeg button[data-seg]').forEach((b) => b.onclick = () => {
+    // BUG-31: the seg really switches the grouping mode (baseline seg structure)
     S.groupMode = b.dataset.seg === 'type' ? 'type' : 'tag';
     if (S.groupMode === 'type') { if (!S.sub.startsWith('type:')) S.sub = 'type:' + TYPE_ORDER[0]; }
     else if (S.sub.startsWith('type:')) S.sub = 'all';
@@ -943,7 +1031,7 @@ function wire() {
           }, stay: 12000 }); return true; } });
       });
   });
-  $$('#listSeg .seg-b').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
+  $$('#listSeg button[data-seg]').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
   $$('#sidebar [data-menu="id-menu"]').forEach((b) => b.onclick = () => openMenu(b, `
     <button class="m-item" data-idact="bind-email">绑定邮箱</button>
     ${S.user.isGuest ? '' : '<button class="m-item" data-idact="logout">退出登录</button>'}`, (act, arg) => {
@@ -1250,45 +1338,25 @@ function updateVarPreview() {
 function wireTimeStep() {
   const seg = $('#freqSeg'); if (!seg) return;
   if (!CF.time) CF.time = defaultTime();
-  const sync = () => {
-    const k = CF.time.freq;
-    $$('#freqSeg .seg-b').forEach((b) => b.classList.toggle('on', b.dataset.fq === k));
-    for (const id of ['fOnce','fAt','fRate','fWeek','fMonth','fTL','fTL2','fTL3','fTL4']) { const el = $('#' + id); if (el) el.style.display = 'none'; }
-    // BUG-03: show the PARENT field of each selector (fWeek wraps fDow,
-    // fMonth wraps fDom) so 每周几/每月几日 actually appear
-    const map = { once: ['fOnce'], daily: ['fAt'], weekdays: ['fAt'], weekly: ['fAt','fWeek'], monthly: ['fAt','fMonth'], timeline: ['fTL','fTL2','fTL3','fTL4'], rate: ['fRate'] };
-    (map[k] || []).forEach((id) => { const el = $('#' + id); if (el) el.style.display = ''; });
-    if (k === 'timeline') fillMilestones();
-  };
-  seg.onclick = (e) => { const b = e.target.closest('[data-fq]'); if (!b) return; CF.time.freq = b.dataset.fq; sync(); previewNext(); };
+  seg.onclick = (e) => { const b = e.target.closest('[data-fq]'); if (!b) return; CF.time.freq = b.dataset.fq; renderCfPane(); };
+  positionSeg(seg);
   // presets write persistent state (BUG-03) — 每天 9:00 is a daily cron at a
   // fixed time, NOT a 1440-minute interval
-  $$('#cfPane [data-preset]').forEach((p) => p.onclick = () => { const [, sp] = PRESETS4[+p.dataset.preset] || [null, null]; if (sp) Object.assign(CF.time, sp); sync(); previewNext(); });
-  $$('#cfPane [data-off]').forEach((b) => b.onclick = () => { const el = $('#fOff'); el.value = (Number(el.value || 0) + (b.dataset.off === '+' ? 1 : -1)); CF.time.off = Number(el.value || 0); previewNext(); });
-  const bind = (id, key, isNum) => { const el = $('#' + id); if (!el) return; el.onchange = () => { CF.time[key] = isNum ? Number(el.value || 0) : el.value; previewNext(); }; };
-  bind('fWhen', 'when'); bind('fTime', 'at'); bind('fTimeTL', 'at'); bind('fRate', 'rate', true); bind('fDow', 'dow', true); bind('fDom', 'dom', true); bind('fOff', 'off', true); bind('fTz', 'tz');
-  sync(); previewNext();
-}
-async function fillMilestones() {
-  const p = $('#fProject'); if (!p) return;
-  if (!CF.time.project) { p.value = S.timeline.find((x) => x.configured)?.id || ''; if (p.value) CF.time.project = p.value; } else p.value = CF.time.project;
-  const proj = S.timeline.find((x) => x.id === p.value) || { milestones: [] };
-  const m = $('#fMile');
-  m.innerHTML = (proj.milestones || []).map((x) => `<option value="${esc(x.name)}" ${x.date?'':'disabled'}>${esc(x.name)}${x.date ? ' · ' + x.date : ' ·（等待数据）'}</option>`).join('') || '<option disabled>（暂无数据）</option>';
-  m.value = CF.time.milestone || '';
-  p.onchange = () => { CF.time.project = p.value; fillMilestones(); previewNext(); };
-  m.onchange = () => { CF.time.milestone = m.value; previewNext(); };
+  $$('#cfPane [data-preset]').forEach((p) => p.onclick = () => { const [, sp] = PRESETS4[+p.dataset.preset] || [null, null]; if (sp) Object.assign(CF.time, sp); renderCfPane(); });
+  $$('#cfPane [data-off]').forEach((b) => b.onclick = () => {
+    const cur = Number(CF.time.off || 0);
+    CF.time.off = Math.max(-30, Math.min(30, cur + (b.dataset.off === '+' ? 1 : -1)));
+    renderCfPane();
+  });
+  const bind = (id, key, isNum) => { const el = $('#' + id); if (!el) return; el.onchange = () => { CF.time[key] = isNum ? Number(el.value || 0) : el.value; renderCfPane(); }; };
+  bind('fWhen', 'when'); bind('fTime', 'at'); bind('fRate', 'rate', true); bind('fDow', 'dow', true); bind('fDom', 'dom', true); bind('fTz', 'tz');
+  const fp = $('#fProject'); if (fp) fp.onchange = () => { CF.time.project = fp.value; CF.time.milestone = ''; renderCfPane(); };
+  const fm = $('#fMile'); if (fm) fm.onchange = () => { CF.time.milestone = fm.value; renderCfPane(); };
 }
 function previewNext() {
-  const el = $('#cfNextPrev'); if (!el) return;
-  const s = currentSpec();
-  if (!s) { el.innerHTML = '时间规则还不完整——选择频率并填好时刻/日期后这里会显示下一次运行'; return; }
-  // BUG-45: timeline specs preview by the milestone rule, not cron defaults
-  const next = s.kind === 'timeline' ? nextAtForTimeline(s) : (s.dateTime || nextAtForCron(s));
-  if (!next) { el.innerHTML = '下一次运行：等待里程碑日期（数据源还没有该里程碑的日期）'; return; }
-  // BUG-61: wall time rendered in the SPEC's timezone so the value and the
-  // tz label always agree (was browser time + task label → 08:24（UTC UTC+0）)
-  el.innerHTML = '下一次运行：' + fmtNext(next, s.timezone) + '（' + tzLabel(s.timezone || 'Asia/Shanghai') + '）';
+  // R5: the preview lives in the .preview-run card on the right
+  const el = $('#timePrevWrap'); if (!el) return;
+  el.innerHTML = timePreviewHTML();
 }
 function wallInTz(tz, epochMs) {
   // wall-clock fields of an instant, read in the spec's timezone
