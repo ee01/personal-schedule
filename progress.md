@@ -363,3 +363,12 @@
 - **网页侧**（本仓库提交）：单设备菜单只留「绑定邮箱」；移除 bindExtension 与等待扩展 toast。
 - **验证**：服务端 95/95；探针 23/23（菜单无扩展入口 + 模拟无感被动流程：会话登录→自动签发设备凭据→清 cookie 重访→桥自动登录）；真实扩展 E2E（重写为无感流）：地址-only Options（断言无邮箱 UI）→ 网页绑定邮箱登录已有账号并合并 → 自动设备绑定（tokens 表可见可吊销设备令牌）→ 清 cookie 重访桥自动登录、无重复任务；另两套 schedule E2E 回归通过。
 - **部署**：网页侧已上线（app.js 指纹与提交一致）。扩展侧需用户重新加载扩展（本机 dist 已含新构建）。
+
+## E-197（2026-11-08）：周日任务永不调度 + AI Report 契约断链
+
+生产库定位（usr_70d93c9f，仅有 rc_bot 已验证连接）：
+1. **Bot 消息任务未投递**：cron `12 23 * * 7`（UI 周选择器周日=7）在 parseCron 里 dow 字面 7 永不匹配 weekday 0-6 → nextRunAt 恒为 null → next_run_at 保持 NULL、零 occurrence。修复：parseCron 将 dow 7 归一化为 0（vixie 别名）。部署后 runner 自行补齐该任务 next_run_at=2026-11-15 23:12。
+2. **AI Report 添加后仍待补全**：创建流第2步的 JQL/空结果策略只渲染未收集，identity（Bot）也未落库 → 保存的 config 只有短式 chatId，服务端按契约判缺 source/template/deliver.chatId/connection:rc_user。修复：UI 落库 config.source+config.deliver（含 sender）；服务端模板改为可选（内置摘要渲染）、config.chatId 兼容为投递对象；去掉 Jira 多余的裸 /search 请求；第2步内联 JIRA 连接提示；编辑/复制/补全预填映射。
+3. **Bot 推送是否需要 RC 授权**：不需要——sender=bot 只要求 rc_bot；旧任务被判缺 connection:rc_user 是因为 sender 从未保存而默认 AsMe。
+
+测试 104 项全通过（新增 dow-7 等价、ai_report 门控矩阵、短式投递回退）。提交 9dae2f0，已部署并验证。
