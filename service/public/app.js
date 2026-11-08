@@ -944,15 +944,15 @@ function wire() {
   $$('#listSeg .seg-b').forEach((b) => b.onclick = () => { S.viewMode = b.dataset.seg; render(); });
   $$('#sidebar [data-menu="id-menu"]').forEach((b) => b.onclick = () => openMenu(b, `
     <button class="m-item" data-idact="bind-email">绑定邮箱</button>
-    <button class="m-item" data-idact="bind-ext">绑定 Personal AI 扩展</button>
     ${S.user.isGuest ? '' : '<button class="m-item" data-idact="logout">退出登录</button>'}`, (act, arg) => {
       if (act !== 'idact') return;
-      // E-194 修订：不设独立的「在这台设备登录已有账号」入口——绑定邮箱
-      // 或扩展 PAT 登录时，由服务端智能判断是否合并本机数据、删除单设备
-      // 账号。单设备会话也不提供「退出」：退出只会丢掉本机数据的访问，
-      // 绑定才是把身份持久化的路径。
+      // E-194 修订：不设独立的「在这台设备登录已有账号」「绑定 Personal AI
+      // 扩展」入口——绑定邮箱时由服务端智能判断是否登录已有账号并合并
+      // 本机数据；已安装并配置了本站地址的扩展完全无感（用户在网站登录后
+      // 扩展自动完成设备绑定，会话过期/新单设备会话由扩展自动登录）。单设
+      // 备会话不提供「退出」：退出只会丢掉本机数据的访问，绑定才是把身份
+      // 持久化的路径。
       if (arg === 'bind-email') openAuthDrawer();
-      if (arg === 'bind-ext') bindExtension();
       if (arg === 'logout') { api('/auth/logout', { method: 'POST', body: '{}' }); location.reload(); }
     }));
   const sr = $('#search'); if (sr) { sr.oninput = (e) => { S.q = e.target.value; render(); $('#search').focus(); $('#search').value = e.target.value; }; }
@@ -1050,43 +1050,6 @@ function mergeTagDlg(from) {
       return true;
     } };
   renderModal();
-}
-/* 扩展登录桥（E-194 追加反馈）：一次性 nonce 桥。页面向自己 origin 广播
-   login-request，Personal AI 扩展（已在 Options 绑定本站并授权网页登录）
-   在后台用 PAT 兑换——PAT 不进页面 JS。本站为 HTTP 部署：PAT 本来就随每次
-   扩展 API 调用走 HTTP，桥不新增凭据暴露面；nonce 单次消费、绑定会话。 */
-const EXT_CHANNEL = 'personal-schedule-extension-v1';
-async function bindExtension() {
-  const meta = await api('/auth/meta');
-  if (meta.status !== 200 || meta.body?.loginBridge?.enabled !== true) {
-    toast('本部署未启用扩展登录桥（需设置 SCHEDULE_AUTH_LOGIN_BRIDGE=1）', { kind: 'warn', stay: 8000 });
-    return;
-  }
-  if (S.user && !S.user.isGuest) { toast('当前已是登录账号，无需扩展登录', { kind: 'ok' }); return; }
-  const nonce = uuid();
-  const reg = await api('/auth/bridge/register', { method: 'POST', body: { nonce } });
-  if (reg.status !== 200 || reg.body?.registered !== true) {
-    toast('无法登记扩展登录请求：' + (reg.body?.error || reg.status), { kind: 'err' });
-    return;
-  }
-  toast('正在等待 Personal AI 扩展响应…（未安装或未授权本站时不会响应）', { stay: 12000 });
-  const finish = new Promise((resolve) => {
-    const timer = setTimeout(() => { window.removeEventListener('message', onMsg); resolve({ timeout: true }); }, 10000);
-    function onMsg(e) {
-      if (e.source !== window || e.origin !== location.origin || e.data?.channel !== EXT_CHANNEL) return;
-      // 扩展注入时会广播 ready：晚到的监听也能收到我们重发的请求
-      if (e.data.type === 'ready') { window.postMessage({ channel: EXT_CHANNEL, type: 'login-request', nonce }, location.origin); return; }
-      if (e.data.type === 'login-result' && e.data.nonce === nonce) {
-        clearTimeout(timer); window.removeEventListener('message', onMsg); resolve(e.data);
-      }
-    }
-    window.addEventListener('message', onMsg);
-    window.postMessage({ channel: EXT_CHANNEL, type: 'login-request', nonce }, location.origin);
-  });
-  const res = await finish;
-  if (res?.timeout) { toast('未收到扩展响应：请确认已安装 Personal AI 扩展，并已在扩展 Options 绑定本站（schedule.xmnup.com）', { kind: 'warn', stay: 10000 }); return; }
-  if (res?.success === true) { toast('扩展登录成功', { kind: 'ok' }); setTimeout(() => location.reload(), 500); return; }
-  toast('扩展登录失败：' + (res?.error || '未知原因'), { kind: 'err', stay: 10000 });
 }
 function openAuthDrawer() {
   // 单设备身份的统一入口（E-194 修订）：只留「绑定邮箱」，不再有独立的
