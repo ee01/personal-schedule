@@ -520,7 +520,7 @@ function createModalHTML() {
       <div class="foot">${CF.lastDraftId||CF.editing?'<span class="saved-dot"></span> 草稿已自动保存':'可先存草稿，再回来补全'}</div></aside>
     <section class="mbody">
       <div class="mhead"><h3 id="cfHead">${stepLabel(CF.step - 1)}</h3><span class="pill ghost mobile-steps">${CF.step} / 5</span><span class="grow"></span>
-        ${CF.type?`<span class="pill">${typeIc(CF.type,'sm')} ${esc(({asme:'As me',bot:'Bot',ai_report:'AI Report',outreach:'帮我问',agent_task:'帮我做'})[CF.type]||TYPE_SHORT[CF.type])}</span>`:''}
+        ${CF.type?`<span class="pill" style="color:var(--t-${CF.type==='agent_task'?'agent':CF.type==='ai_report'?'report':CF.type})">${ic(CF.type==='agent_task'?'agent':CF.type==='ai_report'?'report':CF.type,'sm')} ${esc(({asme:'As me',bot:'Bot',ai_report:'AI Report',outreach:'帮我问',agent_task:'帮我做'})[CF.type]||TYPE_SHORT[CF.type])}</span>`:''}
         <button class="btn ghost icon" data-act="cancelCf" aria-label="关闭（Esc）">${ic('x')}</button></div>
       <div class="mcontent scroll" id="cfPane"></div>
       <div class="mfoot" id="cfFoot">
@@ -529,7 +529,7 @@ function createModalHTML() {
         ${CF.step === 5 && !edit ? '<button class="btn" data-savedraft>存为草稿</button>' : ''}
         ${edit && CF.step !== 5 ? '<button class="btn" data-skiptoconfirm>跳到确认</button>' : ''}
         <button class="btn primary" data-next style="${CF.step===5?'display:none':''}">继续 <kbd>⌘↵</kbd></button>
-        <button class="btn primary" data-finish style="${CF.step===5?'':'display:none'}">${edit?'保存修改':'保存并排程'}</button>
+        <button class="btn primary" data-finish style="${CF.step===5?'':'display:none'}">${edit?'保存修改':'保存并排程'} <kbd style="background:rgba(0,0,0,.12);border-color:transparent;color:inherit">⌘↵</kbd></button>
       </div>
     </section>
   </div></div>`;
@@ -696,7 +696,7 @@ function defaultTime() { return { freq: 'daily', at: '09:00', when: '', rate: 60
 function timeFromSpec(s) {
   const t = defaultTime(); if (!s || !s.kind) return t;
   t.tz = s.timezone || 'Asia/Shanghai';
-  if (s.kind === 'one_shot') { t.freq = 'once'; if (s.dateTime) { const d = new Date(s.dateTime * 1000); t.when = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } return t; }
+  if (s.kind === 'one_shot') { t.freq = 'once'; if (s.dateTime) { const w = wallInTz(t.tz, s.dateTime * 1000); t.when = `${w.y}-${String(w.mo).padStart(2,'0')}-${String(w.d).padStart(2,'0')}T${String(w.h).padStart(2,'0')}:${String(w.mi).padStart(2,'0')}`; } return t; }
   if (s.kind === 'rate') { t.freq = 'rate'; t.rate = s.intervalMinutes || 60; return t; }
   if (s.kind === 'timeline') { t.freq = 'timeline'; t.project = s.project || ''; t.milestone = s.milestone || ''; t.off = s.offsetDays || 0; t.at = s.time || '09:00'; return t; }
   // cron: 5-field (mi hh dom mo dow) or 6-field (sec mi hh dom mo dow)
@@ -719,7 +719,8 @@ function specFromTime() {
   const MM = Number.isFinite(+mmRaw) ? +mmRaw : 0;
   const head = `${MM} ${HH}`;
   if (t.freq === 'once') {
-    const dt = t.when ? Math.floor(new Date(t.when).getTime() / 1000) : 0;
+    const p = String(t.when || '').match(/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)$/);
+    const dt = p ? epochFromWall(t.tz, { y:+p[1], mo:+p[2], d:+p[3], h:+p[4], mi:+p[5] }) : 0;
     if (!dt || Number.isNaN(dt)) return null; // caller blocks — never silently falls back
     return { kind: 'one_shot', dateTime: dt, timezone: t.tz };
   }
@@ -736,12 +737,12 @@ function specFromTime() {
 }
 function currentSpec() { return CF && CF.time ? specFromTime() : null; }
 const PRESETS4 = [
-  ['每天 9:00', { freq: 'daily', at: '09:00' }],
-  ['每小时', { freq: 'rate', rate: 60 }],
-  ['每周一 9:00', { freq: 'weekly', dow: 1, at: '09:00' }],
-  ['工作日 9:00', { freq: 'weekdays', at: '09:00' }],
+  ['工作日 09:00', { freq: 'weekdays', at: '09:00' }],
+  ['每周一 09:30', { freq: 'weekly', dow: 1, at: '09:30' }],
+  ['每天 18:00', { freq: 'daily', at: '18:00' }],
+  ['明天 10:00', { freq: 'once', at: '10:00', tomorrow: true }],
+  ['每月 1 日 10:00', { freq: 'monthly', dom: 1, at: '10:00' }],
   ['mThor FF 前 1 天 10:00', { freq: 'timeline', project: 'mThor', milestone: 'FF', off: -1, at: '10:00' }],
-  ['每月 15 日 9:00', { freq: 'monthly', dom: 15, at: '09:00' }],
 ];
 const KINDS4 = [['once','一次'],['daily','每天'],['weekdays','工作日'],['weekly','每周'],['monthly','每月'],['timeline','Timeline']];
 // BUG-62: stable Chinese names + a COMPUTED offset (DST-aware) — the old
@@ -783,6 +784,7 @@ function tlFieldsHTML(t) {
 function timePreviewHTML() {
   const s2 = currentSpec();
   const tz = (s2 && s2.timezone) || (CF.time && CF.time.tz) || 'Asia/Shanghai';
+  const when = (at) => `${new Intl.DateTimeFormat('zh-CN', { timeZone: tz, weekday: 'short' }).format(at * 1000)} ${fmtWall(at, tz)}`;
   if (!s2) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--warn)">待补全</div><div class="rel">时间规则还不完整——选择频率并填好时刻/日期。</div>`;
   if (s2.kind === 'timeline') {
     const proj = S.timeline.find((p) => p.id === s2.project);
@@ -794,7 +796,7 @@ function timePreviewHTML() {
     if (!ms || !ms.date) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--warn)">等待 ${esc(s2.milestone)} 日期</div><div class="rel">${esc(s2.project)} ${esc(proj?.currentRelease||'')} 还没有 ${esc(s2.milestone)} 日期，出现后自动排程。</div>${src}`;
     const past = !next || next <= Math.floor(Date.now() / 1000);
     return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
-      <div class="first" style="${past?'color:var(--text-3)':''}">${next?fmtWall(next, tz):'本版本已过'}</div>
+      <div class="first" style="${past?'color:var(--text-3)':''}">${next?when(next):'本版本已过'}</div>
       <div class="rel">${past?'这个版本的触发时间已过，下个版本发布日期出来后自动排程':relText(next)}</div>
       <div class="rest"><div><span>${esc(s2.project)} ${esc(proj?.currentRelease||'')} · ${esc(s2.milestone)}</span><span>${ms.date.slice(5).replace('-','/')}</span></div><div><span>${offText(s2.offsetDays||0)}</span><span>${s2.time}</span></div></div>${src}`;
   }
@@ -802,10 +804,10 @@ function timePreviewHTML() {
   if (!list.length) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--err)">—</div><div class="rel">没有未来的运行时间</div>`;
   // F3: fmtNextText already appends "· N 天后" — the rel line carries the
   // schedule description only, no duplicated relative time
-  const wall0 = fmtWall(list[0], tz);
+  const wall0 = when(list[0]);
   return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
     <div class="first">${wall0}</div><div class="rel">${relText(list[0])} · ${esc(specText({ scheduleSpec: s2 }))}</div>
-    ${list.length>1?`<div class="rest">${list.slice(1).map((x)=>`<div><span>${fmtWall(x, tz)}</span><span class="muted">${relText(x)}</span></div>`).join('')}</div>`:`<div class="rest"><div><span class="muted">一次性任务，运行后自动完成</span></div></div>`}`;
+    ${list.length>1?`<div class="rest">${list.slice(1).map((x)=>`<div><span>${when(x)}</span><span class="muted">${relText(x)}</span></div>`).join('')}</div>`:`<div class="rest"><div><span class="muted">一次性任务，运行后自动完成</span></div></div>`}`;
 }
 function cfStep5() {
   const spec = currentSpec();
@@ -856,7 +858,7 @@ function pageConnections() {
   const card = (title, icon, state, description, body, status) => `<div class="card connection-card"><div class="card-h"><span class="type-ic">${ic(icon)}</span><div class="grow"><div class="t">${title}</div><div class="d">${description}</div></div>${status || `<span class="pill ${state==='ok'?'ok':state==='err'?'err':'warn'}"><span class="dot"></span>${state==='ok'?'已连接（验证成功）':state==='err'?'验证失败':state==='unverified'?'已保存未验证':'未配置'}</span>`}</div>${body}</div>`;
   const connection = (title, key, icon, desc) => card(title,icon,connStateOf(key),desc,`<p class="muted" style="font-size:13px;margin:0 0 12px">${connStateOf(key)==='err'?esc(getConnCache(key)?.verifyError||'授权验证失败，请重新配置'):desc}</p>${connForm(key)}`);
   $('#view').innerHTML = `<div class="view-inner"><div class="page-h"><div class="grow"><h2>连接与执行器</h2><p>所有凭证只属于你，分享时不会被携带。帮我问 / 帮我做通过 Memory Service 执行；纯投递类由 Runner 直接投递。</p></div></div><div class="cards">` +
-    card('Schedule Service','server','ok','唯一时间源 · 持久化 Runner','<dl class="kv"><dt>幂等</dt><dd class="mono" style="font-size:12px">occurrence 唯一键 · 幂等键</dd><dt>调度</dt><dd>持久化任务与运行记录</dd></dl>','<span class="pill ok"><span class="dot"></span>服务已连接</span>') +
+    card('Schedule Service','server','ok','唯一时间源 · 持久化 Runner','<dl class="kv"><dt>幂等</dt><dd class="mono" style="font-size:12px">occurrence 唯一键 · 幂等键</dd><dt>调度</dt><dd>持久化任务与运行记录</dd></dl>','<span class="pill ok" title="Schedule Service 已连接"><span class="dot"></span>已连接</span>') +
     connection('RingCentral 个人授权','rc_user','asme','As me 发送身份') +
     connection('Bot 凭据','rc_bot','bot','Bot 身份发送') +
     connection('Memory Service','memory','layers','帮我问 / 帮我做的业务链路与执行器栈') +
@@ -1288,8 +1290,8 @@ function wireChips(inputId, boxId, pickerId, target) {
     const canSearch = q.length >= 2 && connStateOf('rc_user') !== 'off';
     const results = canSearch ? await resolveDirectory(q) : [];
     if (picker) {
-      picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="opt" role="option" data-rec="${i}">${esc(r.name)} <span class="s">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
-        + (q && !results.length ? `<button class="opt" role="option" data-free-recipient><span>${esc(prettifyRecipientLabel(q))}</span><span class="s">按原文添加 · 非目录校验</span></button>` : '');
+      picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="opt ${i===0?'hl':''}" role="option" data-rec="${i}">${esc(r.name)} <span class="s">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
+        + (q && !results.length ? `<button class="opt hl" role="option" data-free-recipient><span>${esc(prettifyRecipientLabel(q))}</span><span class="s">按原文添加 · 非目录校验</span></button>` : '');
       picker.hidden = !q;
       input.setAttribute('aria-expanded', String(Boolean(q)));
       const free = $('[data-free-recipient]', picker);
@@ -1344,7 +1346,14 @@ function wireTimeStep() {
   positionSeg(seg);
   // presets write persistent state (BUG-03) — 每天 9:00 is a daily cron at a
   // fixed time, NOT a 1440-minute interval
-  $$('#cfPane [data-preset]').forEach((p) => p.onclick = () => { const [, sp] = PRESETS4[+p.dataset.preset] || [null, null]; if (sp) Object.assign(CF.time, sp); renderCfPane(); });
+  $$('#cfPane [data-preset]').forEach((p) => p.onclick = () => {
+    const [, sp] = PRESETS4[+p.dataset.preset] || [null, null];
+    if (sp) {
+      Object.assign(CF.time, sp);
+      if (sp.tomorrow) { const w = wallInTz(CF.time.tz, Date.now()); const d = new Date(Date.UTC(w.y,w.mo-1,w.d+1)); CF.time.when = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}T10:00`; }
+    }
+    renderCfPane();
+  });
   $$('#cfPane [data-off]').forEach((b) => b.onclick = () => {
     const cur = Number(CF.time.off || 0);
     CF.time.off = Math.max(-30, Math.min(30, cur + (b.dataset.off === '+' ? 1 : -1)));

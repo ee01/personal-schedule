@@ -84,6 +84,14 @@ try{
  const draft=(await api('/tasks')).body.find(t=>t.title==='恢复草稿');check('draft-close-persists','draft',draft?.status);
  await page.reload();await page.locator(`[data-open="${draft.id}"]`).click();await page.locator('[data-op="edit"]').click();check('draft-edit-content','仅隔离验证',await page.locator('#cfContent').inputValue());await page.locator('[data-step="4"]').click();check('draft-edit-time','10:00',await page.locator('#fTime').inputValue());await dismiss();
  check('draft-no-duplicate',1,(await api('/tasks')).body.filter(t=>t.title==='恢复草稿').length);
+ // One-shot and "tomorrow" presets use the selected task zone, not the browser zone.
+ for(const tz of ['UTC','America/Los_Angeles']){
+  await page.reload();await start('单次-'+tz);await page.locator('#fTz').selectOption(tz);await page.locator('[data-fq="once"]').click();await page.locator('#fWhen').fill('2030-12-11T00:24');await page.locator('#fWhen').dispatchEvent('change');
+  await finish();const once=(await api('/tasks')).body.find(t=>t.title==='单次-'+tz);
+  check('once-zone-'+tz,Math.floor(Date.UTC(2030,11,11,tz==='UTC'?0:8,24)/1000),once.scheduleSpec.dateTime);
+  await page.locator(`[data-open="${once.id}"]`).click();await page.locator('[data-op="edit"]').click();await page.locator('[data-step="4"]').click();check('once-echo-'+tz,'2030-12-11T00:24',await page.locator('#fWhen').inputValue());
+  await page.locator('[data-preset="3"]').click();check('tomorrow-preset-'+tz,true,(await page.locator('#fWhen').inputValue()).endsWith('T10:00'));await dismiss();
+ }
  check('pageerrors',[],errors);
  await page.screenshot({path:out+'tasks-desktop.png'});
 }catch(e){report.fatal={message:e.message,stack:e.stack};}
