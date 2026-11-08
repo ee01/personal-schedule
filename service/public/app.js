@@ -1221,11 +1221,17 @@ function wireChips(inputId, boxId, pickerId, target) {
   const box = $('#' + boxId), picker = $('#' + pickerId);
   let timer = null;
   const refresh = async () => {
-    const results = await resolveDirectory(input.value.trim());
+    const q = input.value.trim();
+    // E-196 follow-up: directory suggestions are a pure UX enhancement riding
+    // on the rc_user (AsMe) identity — without the connection configured
+    // there is nothing to ask, and suggestions start at 2+ characters.
+    // Free-text chips (Enter) are never gated on any of this.
+    const canSearch = q.length >= 2 && connStateOf('rc_user') !== 'off';
+    const results = canSearch ? await resolveDirectory(q) : [];
     if (picker) picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="m-item" data-rec="${i}">${esc(r.name)} <span class="muted">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
-      + (results.length ? '' : '<div class="muted" style="padding:6px 10px">没有匹配的对象</div>');
+      + (results.length || !canSearch ? '' : '<div class="muted" style="padding:6px 10px">没有匹配的对象</div>');
     // BUG-05: no silent fallback — surface the no-match state, keep the input
-    const nm = $('#recNoMatch'); if (nm) nm.style.display = (results.length || !input.value.trim()) ? 'none' : '';
+    const nm = $('#recNoMatch'); if (nm) nm.style.display = (results.length || !canSearch) ? 'none' : '';
     if (picker) $$('#' + pickerId + ' [data-rec]').forEach((m) => m.onclick = () => {
       const arr = target === 'publish.recipients' ? CF.publish.recipients : CF.recipients;
       arr.push(results[+m.dataset.rec]); input.value = ''; renderCfPane();
@@ -1238,7 +1244,9 @@ function wireChips(inputId, boxId, pickerId, target) {
       e.preventDefault();
       const q = input.value.trim();
       async function await0() {
-        const res = q ? await resolveDirectory(q) : [];
+        // Enter always tries the directory first when the AsMe identity
+        // exists (even a 1-char query), then falls back to free text
+        const res = connStateOf('rc_user') !== 'off' && q ? await resolveDirectory(q) : [];
         if (res.length) arr.push(res[0]);
         else if (q) { const ft = freeTextRecipient(q); if (ft) arr.push(ft); } // E-196: free-text fallback
         if (res.length || q) { input.value = ''; renderCfPane(); }
