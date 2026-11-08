@@ -348,3 +348,10 @@
 - **回归（94/94，+1）**：新增 `PUT /connections/rc_user` 走 JWT 流端到端（握手参数、mask、持久化）；重写原 bot 交换测试为 JWT 流（重定向拒绝、payload 形状）；新增 E-195 路径回归（版本化 oauth 路径零命中、JWT 缓存不重复握手、bot 零交换、bot 缺 token 显式失败）。
 - **部署**：`deploy.sh app` + verify 通过；指纹：providers.js=`6766ede5…`、api.js=`d79332e8…`、app.js=`1e1b9b38…`、notify.js=`3df3ba5c…`（服务端与提交一致，线上 `/app/app.js` 同指纹）。
 - **待用户操作**：①方案 A 需在 RC 开发者控制台启用 App 的 JWT auth flow（当前 app 实测 OAU-251 未启用）并从 Credentials 页下载 JWT；②方案 B 需在 Bot App 控制台 Install，从 redirect URI 回调里取长期 token 填入。凭据就位前线上验证无法通过（非代码问题）。
+
+## 2026-11-08 · E-194 反馈轮 3：扩展本体放开 HTTP（用户已确认）+ 桥 origin 缺陷修复（95/95 + 扩展三套 E2E，已部署）
+
+- **用户确认 HTTP 部署**后，在 Personal AI 仓库（提交 `ec5eba8d`）放开扩展侧两处 HTTPS 门禁：内容脚本登录监听/自动登录允许 http 页面；`secureBase` 允许 http 站点的 Options 邮箱绑定与桥兑换（PAT 仍不进页面 JS；整个部署本就全部走 HTTP，桥不新增凭据暴露面）。Options 默认地址改为真实 http 入口。
+- **E2E 发现服务端潜伏缺陷并修复**（本仓库提交 `15950e5`）：扩展后台 SW 的兑换请求会携带 `Origin: chrome-extension://<id>`（Chromium 对带凭据的跨域 POST 附加 Origin），`bridgeOriginOk` 一律拒绝 → 桥即使启用也永远无法完成（此前从未端到端跑通过）。修复：接受扩展 origin（PAT + 会话绑定单次 nonce 才是真正的认证因子，扩展 origin 本身不授予任何东西）；陌生 http origin 仍拒绝。新增单测（95/95）。
+- **扩展侧验证**（真实构建扩展 + 本地真实 HTTP 服务）：①Options 经 http 绑定邮箱全流程通过；②绑定时页面正开着单设备会话——绑定本身即完成 E-194 登录合并（单设备账号删除、本机数据并入）；③清 cookie 重访→内容脚本 nonce 桥自动登录为已绑定账号。另修复该仓库 e2e 的过期断言（BUG-49 撤销标题改为「该分享已撤销」）并新增 `verify:schedule-login-bridge`。三套 schedule E2E 全绿。
+- **部署**：服务端 origin 修复已上线（api.js 指纹与提交一致；线上 `loginBridge.enabled:true`）。扩展侧需用户在 Chrome 重新加载（本机 dist 已含新构建）。
