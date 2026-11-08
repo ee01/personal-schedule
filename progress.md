@@ -372,3 +372,10 @@
 3. **Bot 推送是否需要 RC 授权**：不需要——sender=bot 只要求 rc_bot；旧任务被判缺 connection:rc_user 是因为 sender 从未保存而默认 AsMe。
 
 测试 104 项全通过（新增 dow-7 等价、ai_report 门控矩阵、短式投递回退）。提交 9dae2f0，已部署并验证。
+
+## 2026-11-09 · 视觉复刻第一轮：基准 DOM/类名 + 移除覆盖（R1–R6 完成，R7 部分）
+
+- 按 Opus 7 根因差异表执行：R1 删除重复的 production supplement CSS（保留真实产品新增的最小集）；R2 `.view-inner`/`.mcontent`；R3 侧栏基准结构（.new-btn/.nav-item/.nav-label/.tag-dot/.conn-strip）；R4 创建外壳（步骤栏 ttl/sub/foot + 每步摘要、mhead 步骤标题+类型 pill、底部按钮基准顺序）；R5 Timeline 时间步（.grid-2 双栏 + 预览卡、.seg+.thumb 频率、.select 下拉、里程碑下拉带当前版本、相对里程碑步进器、单一时间输入、时区 hint、.preview-run 卡）；R6 抽屉基准结构（.drawer-h/下划线 tab/无框 .section+h4+dl.kv 网格/.drawer-f，消除 pre-wrap 空行）；R7 部分（统计卡/任务行/.fbtn/.review 确认表/.typegrid/.nl 一句话输入/空态）。补全页/连接页/分享页内部结构留待下一轮。
+- 关键工程约束：所有真实接口与业务门禁保留（探针选择器随基准结构更新后全部重过：r5 14、r6 9、r7 28、r10 10、r11 11、r12 11、r13 6、ui16 31）；104/104 服务端测试；启动冒烟 0 错误。
+- 注意：E-196 语义（目录未命中→自由文本收件人为合法投递目标）与旧探针断言冲突，相关断言已按当前产品语义更新并在备注中说明。
+- **部署指纹**：`/app`=`a5236048…`、`/app/app.js`=`994a8c70…`、`/share/index.html`=`0d84109a…`（不变）。
