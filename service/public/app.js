@@ -515,6 +515,9 @@ function doneModalHTML() {
       </div>
     </div></div></div>`;
 }
+function recipientStepSummary() {
+  return CF.type ? CF.recipients.map((r) => r.name || r.raw || '未解析').slice(0, 4).join('、') || (CF.type === 'agent_task' ? '默认执行器' : '') : '';
+}
 function createModalHTML() {
   if (CF.done) return doneModalHTML();
   const edit = Boolean(CF.editing);
@@ -522,7 +525,7 @@ function createModalHTML() {
   const stepValue = (i) => {
     if (i === 0) return CF.type ? TYPE_LABEL[CF.type] : '';
     if (i === 1) return (CF.title || CF.content || '').slice(0, 18);
-    if (i === 2) return CF.type ? (CF.recipients.map((r) => r.name || r.raw || '未解析').slice(0, 4).join('、')) || (CF.type === 'agent_task' ? '默认执行器' : '') : '';
+    if (i === 2) return recipientStepSummary();
     if (i === 3) return CF.time ? ({ daily:'每天', weekdays:'工作日', weekly:'每周', monthly:'每月', once:'一次', timeline:'Timeline', rate:'间隔' }[CF.time.freq] || '每天') : '每天';
     return '';
   };
@@ -551,6 +554,10 @@ function createModalHTML() {
 }
 function renderCfPane() {
   const pane = $('#cfPane'); if (!pane || CF.done) return;
+  // Chip edits redraw the pane, not the modal shell. Keep its step summary
+  // in sync without rebuilding the shell or saving the editing session.
+  const summary = $('#modalLayer [data-step="3"] .v');
+  if (summary) summary.textContent = recipientStepSummary();
   pane.innerHTML = `<div class="step-pane">${CF.step === 1 ? cfStep1() : CF.step === 2 ? cfStep2() : CF.step === 3 ? cfStep3() : CF.step === 4 ? cfStep4() : cfStep5()}</div>`;
   if (CF.step === 1) $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); });
   wireCfPane();
