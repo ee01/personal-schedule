@@ -66,3 +66,31 @@ test('nextRunAt: cron uses task timezone', () => {
   const next = nextRunAt(task, after);
   assert.equal(next * 1000, Date.parse('2026-11-11T00:00:00Z')); // 09:00 Tokyo = 00:00 UTC
 });
+
+// E-197: vixie-cron accepts 7 as a Sunday alias for 0. The UI weekly picker
+// sends "… * * 7" for 每周日 — a literal 7 in the dow set never matched
+// weekday 0-6, so nextRunAt returned null and Sunday tasks never scheduled.
+test('parseCron normalizes dow 7 to Sunday 0 (E-197)', () => {
+  const parsed = parseCron('12 23 * * 7');
+  assert.deepEqual(parsed.dayOfWeek, [0]);
+  assert.ok(!parsed.dayOfWeek.includes(7));
+});
+
+test('cron dow 7 and dow 0 schedule the same Sunday instant (E-197)', () => {
+  const after = Date.parse('2026-11-10T02:00:00Z'); // Tuesday Shanghai
+  const bySeven = nextCronInstant(parseCron('12 23 * * 7'), after, 'Asia/Shanghai');
+  const byZero = nextCronInstant(parseCron('12 23 * * 0'), after, 'Asia/Shanghai');
+  // 2026-11-15 is a Sunday; 23:12 Shanghai = 15:12 UTC
+  assert.equal(bySeven, Date.parse('2026-11-15T15:12:00Z'));
+  assert.equal(bySeven, byZero);
+});
+
+test('nextRunAt: weekly Sunday task (UI picker form) is never null (E-197)', () => {
+  const task = {
+    scheduleSpec: JSON.stringify({ kind: 'cron', expr: '12 23 * * 7', timezone: 'Asia/Shanghai' }),
+  };
+  const next = nextRunAt(task, Date.now());
+  assert.notEqual(next, null);
+  const w = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', weekday: 'short' }).format(new Date(next * 1000));
+  assert.equal(w, 'Sun');
+});

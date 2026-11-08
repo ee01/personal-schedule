@@ -148,7 +148,12 @@ export function parseCron(expr) {
   const hour = parseField(rest[1], 0, 23, null, false);
   const dayOfMonth = parseField(rest[2], 1, 31, null, false);
   const month = parseField(rest[3], 1, 12, MONTH_NAMES, false);
-  const dayOfWeek = parseField(rest[4], 0, 7, DOW_NAMES, true);
+  // E-197: vixie-cron accepts 7 as a Sunday alias for 0. The dow field range
+  // is 0-7, so the alias survives parseField as a literal 7 — but
+  // dayMatches() compares against weekday 0-6, where 7 never matches. That
+  // made every "每周日" task built by the UI picker ("… * * 7") compute
+  // nextRunAt = null and never schedule at all. Normalize 7 → 0 here.
+  const dayOfWeek = new Set([...parseField(rest[4], 0, 7, DOW_NAMES, true)].map((v) => v % 7));
   // RFC nuance: if both dom and dow are restricted, either may match.
   const domStar = /^\*/.test(rest[2]) || /^.*\/.*$/.test(rest[2]) && rest[2].split('/')[1] !== undefined && /^\*/.test(rest[2].split('/')[0]);
   const dowStar = /^\*/.test(rest[4]) || /^\*\/\d+/.test(rest[4]);

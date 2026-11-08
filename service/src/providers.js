@@ -308,14 +308,8 @@ export const providers = {
         const jira = connections.jira;
         if (!jira) throw new HttpError(424, 'jira connection not configured');
         const base = String(jira.baseUrl).replace(/\/+$/, '');
-        const response = await httpJson('GET', `${base}/rest/api/2/search`, {
-          headers: {
-            Authorization: `Bearer ${jira.token}`,
-            Accept: 'application/json',
-          },
-          // jql passed via query
-        });
-        // fetch with query
+        // E-197: one query — the old path issued a bare /search request first
+        // and threw the response away (a wasted, always-invalid API call)
         const withQuery = await fetch(
           `${base}/rest/api/2/search?maxResults=50&fields=key,summary,status,assignee,priority,duedate&jql=${encodeURIComponent(source.jql)}`,
           {
@@ -336,7 +330,10 @@ export const providers = {
         throw new HttpError(422, 'ai_report source not configured');
       }
       const rendered = renderReportTemplate(task.config.template, facts);
-      const deliver = task.config.deliver || {};
+      const deliver = { ...(task.config.deliver || {}) };
+      // E-197: short-form recipient fallback — the create flow used to save
+      // the target as config.chatId; treat it as the deliver target
+      deliver.chatId = deliver.chatId || task.config.chatId;
       const conn = deliver.sender === 'bot' ? connections.rc_bot : connections.rc_user;
       const kind = deliver.sender === 'bot' ? 'bot' : 'user';
       if (!conn) throw new HttpError(424, `rc_${kind} connection not configured`);
@@ -508,7 +505,10 @@ export function renderReportTemplate(template, facts) {
         }))
       : facts,
   };
-  return String(template).replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, key) => {
+  // E-197: the report template is optional — an absent template renders a
+  // built-in summary instead of the literal string "undefined"
+  const text = String(template || '').trim() || '共 {{count}} 条事项：\n{{issues}}';
+  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, key) => {
     if (key === 'issues') {
       return Array.isArray(data.issues)
         ? data.issues.map((issue) => `• ${issue.key || ''} ${issue.summary || ''}（${issue.status || '?'}，${issue.assignee || '?'}）`).join('\n')

@@ -179,7 +179,7 @@ function specText(t) {
   return s.kind;
 }
 function recipientsText(t) {
-  const list = t.config?.recipients || (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }] : []);
+  const list = t.config?.recipients || ((t.config?.deliver?.chatId || t.config?.chatId) ? [{ id: t.config?.deliver?.chatId || t.config?.chatId, name: t.config?.chatName || t.config?.deliver?.chatName || null }] : []);
   if (t.type === 'agent_task' && t.notify?.publish?.enabled) return (t.notify.publish.recipients || []).map((r) => r.name || r.raw || '（名称未知）').join('、') || '未设置';
   const shown = list.map((r) => r.name).filter(Boolean).join('、');
   // BUG-44: a valid deliverable id without a display name is NOT a missing
@@ -430,6 +430,8 @@ function newFlow(type, prefill = {}) {
   CF = { step: 1, type: type || null, oneLine: prefill.oneLine || '', title: prefill.title || '', content: prefill.content || '',
     recipients: prefill.recipients || [], identity: prefill.identity || 'user', publish: prefill.publish || { enabled: false, source: 'template', template: [], recipients: [] },
     mode: prefill.mode || 'read', executor: prefill.executor || 'memory', spec: prefill.spec || null, tags: prefill.tags || [], editing: prefill.id || null,
+    // E-197: step-2 extras (ai_report JQL / 空结果策略) persist in CF.config
+    config: prefill.config || {},
     // BUG-03: the time config lives in persistent form state — preview,
     // confirm and save all derive from CF.time; leaving step 4 never loses
     // weekday / date / time / timezone
@@ -545,14 +547,14 @@ function cfStep2() {
       <div class="muted" style="margin-top:4px">支持 @对象 提及（发送时转为真实 mention）</div></div>`,
     bot: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="Bot 要播报的内容">${esc(CF.content)}</textarea>${varChips}
       <div class="content-box" style="margin-top:8px"><div class="cb-h">发送时预览</div><div class="muted" id="varPrev" style="white-space:pre-wrap"></div></div></div>`,
-    ai_report: `<div class="field"><label>JQL</label><input class="input" id="cfJql" value="${esc(CF.config?.jql||'')}"></div><div class="field"><label>空结果策略</label><div class="seg" id="cfEmpty"><button class="seg-b" data-empty="send">发送摘要</button><button class="seg-b" data-empty="silent">静默</button></div></div>`,
+    ai_report: `<div class="field"><label>JQL</label><input class="input" id="cfJql" value="${esc(CF.config?.jql||'')}" placeholder="如：project = X AND sprint in openSprints()"></div><div class="field"><label>空结果策略</label><div class="seg" id="cfEmpty"><button class="seg-b ${(CF.config?.emptyPolicy||'send')==='send'?'on':''}" data-empty="send">发送摘要</button><button class="seg-b ${(CF.config?.emptyPolicy||'silent')==='silent'?'on':''}" data-empty="silent">静默</button></div><div class="muted" style="margin-top:4px">报告模板选填：不填则按内置摘要格式生成。</div></div>`,
     outreach: `<div class="field"><label>问题</label><textarea class="input" id="cfContent" placeholder="想问对方的问题">${esc(CF.content)}</textarea></div>
       <div class="field"><label>完成标准</label><input class="input" id="cfGoal" value="${esc(CF.config?.goal||'')}"></div>
       <div class="field"><label>追问策略</label><div class="row"><input class="input" id="cfMax" type="number" value="${CF.config?.maxFollowup ?? 2}" style="width:90px"> 次 × <input class="input" id="cfGap" type="number" value="${CF.config?.followupIntervalSeconds ?? 7200}" style="width:110px"> 秒</div></div>`,
     agent_task: `<div class="field"><label>执行指令（只描述要做什么）</label><textarea class="input" id="cfContent" placeholder="通知谁、输出格式在下一步设置">${esc(CF.content)}</textarea></div>
       <div class="field"><label>模式</label><div class="choice-row"><button class="choice" data-mode="read">只读</button><button class="choice" data-mode="write">可写</button></div></div>`,
   }[CF.type] || '';
-  return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
+  return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}${CF.type === 'ai_report' && connStateOf('jira') !== 'ok' ? '<div class="alert warn">AI Report（JQL 数据源）需要 JIRA 连接（尚未配置），未配置前任务会保持待补全。<button class="btn ghost sm" data-configjira>现在配置</button></div>' : ''}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
 }
 function chip(rec, i) {
   // BUG-44: an id-only recipient (API/import created) keeps its identity and
@@ -976,8 +978,12 @@ function wireDrawer() {
   });
 }
 const recipsFrom = (t) => t.config?.recipients?.length ? t.config.recipients
-  : (t.config?.chatId ? [{ id: t.config.chatId, name: t.config.chatName || null }]
+  : ((t.config?.deliver?.chatId || t.config?.chatId) ? [{ id: t.config?.deliver?.chatId || t.config?.chatId, name: t.config?.chatName || t.config?.deliver?.chatName || null }]
   : (t.config?.pendingRecipient ? [{ raw: t.config.pendingRecipient, unresolved: true }] : []));
+// E-197: ai_report identity + step-2 extras live under config.deliver.sender /
+// config.source — map them back into the create-flow state on edit/copy
+const identityOf = (t) => (t.config?.deliver?.sender || t.config?.sender) === 'bot' ? 'bot' : 'user';
+const reportCfgOf = (t) => ({ jql: t.config?.source?.jql ?? t.config?.jql ?? '', emptyPolicy: t.config?.source?.emptyPolicy ?? t.config?.emptyPolicy ?? 'send' });
 async function drawerAction(id, op) {
   if (op === 'pause') {
     // BUG-17: pause with undo, no full reload
@@ -990,16 +996,16 @@ async function drawerAction(id, op) {
     if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).map((m) => missingLabel(m)).join('、'), { kind: 'err', stay: 8000 });
     else { await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); toast('已启用', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); await refresh(); render(); } }); }
     return; }
-  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
+  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     // BUG-21: editing starts at the content step — the type is already known
     CF.prevRevision = t.revision || 1; CF.step = 2; renderModal(); return; }
   if (op === 'copy') {
     const t = DETAIL.task; const sp = taskSpec(t);
     newFlow(t.type, { title: t.title + '（副本）', content: t.content, spec: sp,
       recipients: recipsFrom(t),
-      identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory',
+      identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory',
       publish: t.notify?.publish || { enabled: false, recipients: [], source: 'template', template: [] },
-      tags: (t.tags || []).map((g) => g.id) });
+      tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     CF.step = 5; renderModal(); return;
   }
   if (op === 'delete') return confirmDlg({ title: '删除计划任务', body: '删除后进入归档（保留任务身份与执行记录），可随时从归档恢复。确定吗？', ok: '删除', danger: true,
@@ -1137,6 +1143,11 @@ function wireCfPane() {
   });
   updateVarPreview();
   $$('#cfPane [data-mode]').forEach((b) => b.onclick = () => { CF.mode = b.dataset.mode; renderModal(); });
+  // E-197: the ai_report step-2 fields were rendered but never collected —
+  // the JQL and 空结果策略 choices silently vanished on save, leaving the
+  // server to gate every report as 数据源待补全
+  const jql = $('#cfJql'); if (jql) jql.oninput = (e) => { CF.config = CF.config || {}; CF.config.jql = e.target.value; };
+  $$('#cfPane [data-empty]').forEach((b) => b.onclick = () => { CF.config = CF.config || {}; CF.config.emptyPolicy = b.dataset.empty; renderCfPane(); });
   $$('#cfPane [data-demo]').forEach((c) => c.onclick = () => tryOneLine(c.dataset.demo));
   // chips 输入（X1）
   wireChips('recInput', 'recBox', 'recPicker', 'recipients');
@@ -1155,6 +1166,7 @@ function wireCfPane() {
   $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
   $$('#cfPane [data-configbot]').forEach((b) => b.onclick = () => openConnDlg('rc_bot', 3));
   $$('#cfPane [data-configuser]').forEach((b) => b.onclick = () => openConnDlg('rc_user', 3));
+  $$('#cfPane [data-configjira]').forEach((b) => b.onclick = () => openConnDlg('jira', CF.step || 2));
   const pubOn = $('#pubOn'); if (pubOn) pubOn.onchange = (e) => { CF.publish.enabled = e.target.checked; renderModal(); };
   $$('#cfPane [data-ps]').forEach((b) => b.onclick = () => { CF.publish.source = b.dataset.ps; renderModal(); });
   $$('#cfPane [data-tpl]').forEach((b) => b.onclick = () => {
@@ -1390,6 +1402,16 @@ async function saveTaskInner(finalStatus) {
     if (!r.id && r.raw) config.pendingRecipient = r.raw; else delete config.pendingRecipient;
   }
   if (CF.type === 'agent_task') { config.executor = CF.executor === 'bot' ? 'memory' : CF.executor; config.mode = CF.mode; config.sender = CF.identity; }
+  if (CF.type === 'ai_report') {
+    // E-197: persist the server's ai_report contract — source (JQL) + deliver
+    // target AND sender identity. The old flow saved only a short-form chatId:
+    // the server gated every report as 待补全（数据源/投递对象） and, with no
+    // sender on record, defaulted to AsMe and demanded RingCentral 个人授权
+    // even though the user picked a Bot identity in step 3.
+    const r = CF.recipients[0] || {};
+    config.source = { kind: 'jql', jql: String(CF.config?.jql || '').trim(), emptyPolicy: CF.config?.emptyPolicy === 'silent' ? 'silent' : 'send' };
+    config.deliver = { chatId: r.id || null, sender: CF.identity === 'bot' ? 'bot' : 'user' };
+  }
   if (CF.type === 'outreach') config.template = { question: $('#cfContent')?.value || CF.content, goal: $('#cfGoal')?.value || '', maxFollowup: +($('#cfMax')?.value || 2), followupIntervalSeconds: +($('#cfGap')?.value || 7200), recipients: CF.recipients.map((r) => ({ targetType: 'user', targetRef: r.id })) };
   const notify = { notifyMe: { mode: CF.notifyMode || 'every' }, publish: { enabled: CF.publish.enabled && (CF.publish.recipients || []).length > 0, recipients: CF.publish.recipients || [], identity: CF.identity === 'bot' ? 'bot' : 'user', source: CF.publish.source || 'template', template: CF.publish.template || [] } };
   const body = { type: CF.type, title: CF.title || CF.oneLine.slice(0, 40) || '未命名任务', content: CF.content || CF.oneLine, scheduleSpec: spec, config, notify, tagIds: CF.tags, status: finalStatus };
@@ -1464,7 +1486,7 @@ function wireSetup() {
     const [id, step] = b.dataset.fixstep.split(':');
     await openDrawer(id);
     const t = DETAIL.task;
-    newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: t.config?.sender === 'bot' ? 'bot' : 'user', mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id) });
+    newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     CF.step = +step; renderModal();
   });
   $$('#view [data-enable]').forEach((b) => b.onclick = async () => { const r = await api(`/tasks/${b.dataset.enable}/status`, { method: 'POST', body: { status: 'active' } }); toast(r.status === 200 ? '已启用' : '无法启用：' + (r.body.error || ''), { kind: r.status === 200 ? 'ok' : 'err' }); location.reload(); });

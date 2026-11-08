@@ -72,9 +72,14 @@ export function createTaskStore(db, getConnection) {
       } else {
         missing.push('source');
       }
-      if (!config.template) missing.push('template');
+      // E-197: the report template is OPTIONAL — rendering falls back to a
+      // built-in summary, so an absent template is not a missing-config item
       const deliver = config.deliver || {};
-      if (!deliver.chatId) missing.push('deliver.chatId');
+      // E-197: accept the short-form recipient (config.chatId) as the deliver
+      // target too — the create flow used to save it there and nothing else
+      if (!deliver.chatId && !config.chatId) missing.push('deliver.chatId');
+      // E-197: bot delivery needs ONLY the Bot credential; RingCentral 个人
+      //授权 (AsMe) is required exactly when the sender is the user identity
       if (deliver.sender === 'bot' && !con('rc_bot')) missing.push('connection:rc_bot');
       if (!deliver.sender || deliver.sender === 'user') {
         if (!con('rc_user')) missing.push('connection:rc_user');
