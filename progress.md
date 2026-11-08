@@ -329,3 +329,11 @@
 - **窄屏侧栏修复**：根因是三层叠加——① Esc 只移除无任何 CSS 规则的 `body.side-open`；② 侧栏（z 45，fixed）盖住左上角汉堡按钮（topbar z 20）；③ 无遮罩/关闭按钮。修复：新增 `#sideScrim` 遮罩（挂载在 `#app` 内——`.app` 是 z-index:1 的层叠上下文，挂 body 会盖住侧栏本身吞掉点击）、面板内关闭按钮（仅窄屏显示）、Esc 真正收起、侧栏导航跳转后自动收起；`body.side-open` 顺带锁定滚动。
 - **探针**：`service/test/probe-e194-ui.mjs`（playwright，`PW=` 可覆盖路径；不入 `npm test` glob）：390px 视口 15/15——开/关四种方式、遮罩出现与消失、桌面无遮罩无关闭按钮、guest 菜单无独立登录/退出项、绑定弹窗含合并文案。
 - **部署**：`deploy.sh app` + verify 通过；指纹：app.js=`ccce1ad5…`、index.html=`04c8e89…`（服务端与提交一致，线上 `/app/app.js` 同指纹）。
+
+## 2026-11-08 · E-194 反馈轮 2：扩展登录桥在 HTTP 部署上启用 + 页面侧流程实现（91/91 + 探针 20/20，已部署+线上启用）
+
+- **用户决策**：站点保持 HTTP，不需要 HTTPS。扩展登录桥原"待受信 HTTPS 就绪后开放"的门禁为部署级环境变量（`SCHEDULE_AUTH_LOGIN_BRIDGE`），由所有者决定开启；PAT 本来就随每次扩展 API 调用走 HTTP，桥（多一次 PAT 认证调用 + 一次性会话绑定 nonce）不新增凭据暴露面。
+- **服务端/页面侧**（提交 `7119114`）：「绑定 Personal AI 扩展」从"待 HTTPS"提示改为真实桥流程——页面生成 nonce → `POST /auth/bridge/register`（会话绑定、单次消费）→ 向自身 origin 广播 `login-request`（扩展注入晚到时凭 `ready` 重发）→ 监听 `login-result`/超时并给出可操作提示；PAT 不进页面 JS。`config.js` 注释更新为记录本次 HTTP 启用决策。
+- **部署启用**：`~/personal-schedule/service.env` 追加 `export SCHEDULE_AUTH_LOGIN_BRIDGE=1`（注意：该文件其余行均带 export，无 export 的变量不会传给 exec 的 node——首次追加漏了 export 导致不生效，已修正）+ `launchctl kickstart` 重启；线上 `/api/v1/auth/meta` 现报告 `loginBridge.enabled:true`。
+- **探针扩至 20/20**：模拟扩展完整走通——CLI 签发 PAT → guest 页面点「绑定 Personal AI 扩展」→ 捕获 login-request nonce → 以 PAT+页面 cookie 调 `bridge/exchange` → 会话变为真实账号。
+- **未完成边界（如实）**：Personal AI 扩展本体在两处硬性拒绝 HTTP（`contentScriptSchedule.ts` 的 `location.protocol !== 'https:'` 门禁——HTTP 页面上监听与自动登录不注入；`scheduleAuth.ts` `secureBase()`——Options 里也无法把 HTTP 站点绑定为扩展账号）。该仓库不在本议题改动范围内：用户在扩展 Options 绑定 `http://schedule.xmnup.com` 前需要 Personal AI 侧放开这两处（安全姿态变更），已在议题回复中说明并等待指示。
