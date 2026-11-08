@@ -86,16 +86,49 @@ async function rcAccessToken(connection) {
   return connection.token;
 }
 
+// E-196: the create UI accepts free-text recipients — "esone.qiu" becomes a
+// "Esone Qiu" chip with the raw text stored as the send target, no directory
+// gate. RC still needs a real chat id when posting, so non-numeric free text
+// is resolved best-effort here against the RC directory: the raw text first,
+// then its prettified label. Nothing resolves → the raw value is sent as-is
+// and RC's own error is recorded on the occurrence (honest failure, never a
+// silent drop or fake success).
+function prettifiedRecipientLabel(raw) {
+  const t = String(raw || '').trim();
+  if (!t || t.includes('@')) return t;
+  return t
+    .split(/[._\-\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+async function resolveFreeTextChat(connection, kind, chatId) {
+  const raw = String(chatId || '').trim();
+  if (!raw || /^\d+$/.test(raw)) return raw; // a real (numeric) chat id — post directly
+  for (const q of [raw, prettifiedRecipientLabel(raw)]) {
+    if (!q) continue;
+    try {
+      const { results } = await rcDirectorySearch({ ...connection, kind }, q);
+      if (results && results.length) return results[0].id;
+    } catch {
+      // resolution is best-effort — fall through to the raw value
+    }
+  }
+  return raw;
+}
+
 export async function rcPostMessage(connection, kind, { chatId, text }) {
   const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind });
+  const target = await resolveFreeTextChat(connection, kind, chatId);
   const response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: { chatId, text },
+    body: { chatId: target, text },
   });
   if (!response.ok) {
     const detail = response.json?.message || response.text?.slice(0, 300) || '';

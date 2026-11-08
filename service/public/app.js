@@ -502,13 +502,14 @@ async function tryOneLine(text) {
   CF.oneLine = t; CF.type = type; CF.spec = spec; CF.time = timeFromSpec(spec); CF.title = t.length > 40 ? t.slice(0, 40) : t;
   // BUG-57: keep the recognized fragments to highlight them on the confirm page
   CF.highlights = [at ? { text: at[0], label: '时间' } : null, tag ? { text: '#' + tag[1], label: '对象' } : null, to ? { text: to[0], label: '对象' } : null].filter(Boolean);
-  // BUG-05: #名称 优先按收件人解析（X1 不伪造）；解析不出时标待确认，绝不本地造 Tag
+  // BUG-05: #名称 优先按收件人解析（X1）；E-196: 解析不出时直接按输入文本
+  // 建立联系人 chip（不阻塞、不标待确认）
   if (tag) {
     const r = await resolveDirectory(tag[1]);
-    if (r.length) { CF.recipients = [r[0]]; }
-    else { CF.recipients = [{ raw: tag[1], unresolved: true }]; CF.pending = true; }
+    const fallback = freeTextRecipient(tag[1]);
+    CF.recipients = r.length ? [r[0]] : (fallback ? [fallback] : []);
   }
-  if (to) { const r = await resolveDirectory(to[1]); CF.recipients = r.length ? [r[0]] : [{ raw: to[1], unresolved: true }]; }
+  if (to) { const r = await resolveDirectory(to[1]); const fallback = freeTextRecipient(to[1]); CF.recipients = r.length ? [r[0]] : (fallback ? [fallback] : []); }
   CF.step = 5; renderModal();
 }
 async function resolveDirectory(q) {
@@ -519,6 +520,20 @@ async function resolveDirectory(q) {
   const results = r.body?.results || [];
   if (r.status === 200) S.dirCache[cacheKey] = results;
   return results;
+}
+// E-196: free-text recipients — a directory miss no longer blocks; the raw
+// text becomes a chip with a prettified label ("esone.qiu" → "Esone Qiu").
+// The raw value stays the send target (chatId / targetRef), so the dispatch
+// request goes to the person the user actually typed.
+function prettifyRecipientLabel(raw) {
+  const t = String(raw || '').trim();
+  if (!t || t.includes('@')) return t;
+  return t.split(/[._\-\s]+/).filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+function freeTextRecipient(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  return { kind: 'user', id: t, name: prettifyRecipientLabel(t) || t, raw: t, freeText: true };
 }
 function cfStep2() {
   if (!CF.type) { CF.step = 1; return cfStep1(); }
@@ -543,7 +558,7 @@ function chip(rec, i) {
   // BUG-44: an id-only recipient (API/import created) keeps its identity and
   // honestly shows 名称未知 — no fabricated name, no false "missing"
   const label = rec.name || rec.raw || '（名称未知）';
-  return `<span class="chip">${esc(label)}${rec.unresolved?' <span class="muted">(未解析)</span>':''} <span data-rmrec="${i}" role="button" aria-label="移除">×</span></span>`;
+  return `<span class="chip">${esc(label)}${rec.unresolved ? ' <span class="muted">(未解析)</span>' : ''}${rec.freeText ? ' <span class="muted">(按输入文本)</span>' : ''} <span data-rmrec="${i}" role="button" aria-label="移除">×</span></span>`;
 }
 function cfStep3() {
   if (['asme','bot','ai_report'].includes(CF.type)) {
@@ -551,7 +566,7 @@ function cfStep3() {
     return `<div class="field"><label>收件人</label>
       <div class="chips-input" id="recBox">${CF.recipients.map(chip).join('')}<input id="recInput" placeholder="输入姓名、邮箱或群名后回车…" autocomplete="off"></div>
       <div class="picker" id="recPicker"></div>
-      <div class="alert warn" id="recNoMatch" style="display:none">没有匹配的对象——请换一个关键词；不能用输入文本伪造联系人。</div></div>
+      <div class="alert warn" id="recNoMatch" style="display:none">没有匹配的对象——可直接回车按输入文本添加（如 esone.qiu → Esone Qiu），发送时按原文投递。</div></div>
       ${hasBot ? botPickerHTML() : `<div class="field"><label>发送身份</label><div class="choice-row"><button class="choice" data-ident="user">以我的身份</button></div></div>`}
       ${CF.type === 'asme' ? '<div class="alert info">需要 RingCentral 个人授权（连接与执行器 中配置）。</div>' : ''}`;
   }
@@ -1211,7 +1226,17 @@ function wireChips(inputId, boxId, pickerId, target) {
   input.oninput = () => { clearTimeout(timer); timer = setTimeout(refresh, 200); };
   input.onkeydown = (e) => {
     const arr = target === 'publish.recipients' ? CF.publish.recipients : CF.recipients;
-    if (e.key === 'Enter') { e.preventDefault(); const r = await0(input.value.trim()); async function await0(q){ const res = await resolveDirectory(q); if (res.length) { arr.push(res[0]); input.value=''; renderCfPane(); } } }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = input.value.trim();
+      async function await0() {
+        const res = q ? await resolveDirectory(q) : [];
+        if (res.length) arr.push(res[0]);
+        else if (q) { const ft = freeTextRecipient(q); if (ft) arr.push(ft); } // E-196: free-text fallback
+        if (res.length || q) { input.value = ''; renderCfPane(); }
+      }
+      await0();
+    }
     if (e.key === 'Backspace' && !input.value && arr.length) { arr.pop(); renderCfPane(); }
   };
   input.dispatchEvent(new Event('input'));
