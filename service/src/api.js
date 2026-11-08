@@ -111,9 +111,15 @@ function describeRole(type, cfg) {
   // (SCHEDULE_AUTH_LOGIN_BRIDGE=1).
   function bridgeOriginOk(req) {
     // defense in depth on top of SameSite=Lax: when a browser sends an Origin
-    // header for these endpoints it must be this service's public origin
+    // header for these endpoints it must be this service's public origin.
+    // Exception: the Personal AI extension's background exchange sends its own
+    // chrome-extension:// origin (E-194 e2e finding — Chromium attaches it on
+    // credentialed cross-origin POSTs from extension service workers). The
+    // PAT in Authorization plus the session-bound single-use nonce remain the
+    // actual authenticators; an extension origin alone grants nothing.
     const origin = req.headers.origin;
-    if (!origin) return true; // non-browser callers (extension background)
+    if (!origin) return true; // non-browser callers
+    if (origin.startsWith('chrome-extension://')) return true;
     const base = publicBaseUrl();
     if (base && origin === base) return true;
     return origin === `http://127.0.0.1:${config.port}` || origin === `http://localhost:${config.port}`;

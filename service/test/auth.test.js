@@ -351,6 +351,51 @@ test('legacy sessions (pre-v3, token_id NULL) survive token revocation — docum
   }
 });
 
+test('bridge origins: the extension background origin is accepted; foreign http origins stay rejected (E-194 e2e finding)', async () => {
+  const { config } = await import('../src/config.js');
+  const saved = config.authLoginBridgeEnabled;
+  config.authLoginBridgeEnabled = true;
+  const savedUrl = config.publicUrl;
+  config.publicUrl = 'http://schedule.example';
+  const ctx = await fresh();
+  try {
+    const nonce = 'e194-extension-origin-nonce-01';
+    const g = await ctx.req('POST', '/api/v1/auth/guest');
+    const cookie = g.headers['set-cookie'][0].split(';')[0];
+    // register from the page origin (Origin: the site itself)
+    const reg = await ctx.req('POST', '/api/v1/auth/bridge/register', {
+      cookie, body: { nonce }, headers: { Origin: 'http://schedule.example' },
+    });
+    assert.equal(reg.statusCode, 200, 'page-origin register passes');
+    // a foreign http origin is still refused
+    const bad = await ctx.req('POST', '/api/v1/auth/bridge/register', {
+      cookie, body: { nonce: 'e194-foreign-origin-nonce-02' }, headers: { Origin: 'http://evil.example' },
+    });
+    assert.equal(bad.statusCode, 400, 'foreign http origin rejected');
+    // the extension background exchange arrives with its chrome-extension
+    // origin — Chromium attaches it on credentialed cross-origin POSTs from
+    // extension service workers; the PAT + session-bound nonce are the
+    // authenticators, so the exchange must succeed
+    const pat = ctx.services.auth.issueToken(ctx.user.id, 'ext');
+    const ex = await ctx.req('POST', '/api/v1/auth/bridge/exchange', {
+      cookie,
+      headers: { Authorization: `Bearer ${pat}`, Origin: 'chrome-extension://abcdefgehijklmno' },
+      body: { nonce },
+    });
+    assert.equal(ex.statusCode, 200, 'extension-origin exchange accepted');
+    assert.equal((await ex.json()).user.id, ctx.user.id);
+    // an extension origin WITHOUT the PAT still gets nothing
+    const noPat = await ctx.req('POST', '/api/v1/auth/bridge/exchange', {
+      cookie, headers: { Origin: 'chrome-extension://abcdefgehijklmno' }, body: { nonce: 'e194-nonce-no-pat-03' },
+    });
+    assert.equal(noPat.statusCode, 400, 'no PAT → no exchange');
+  } finally {
+    config.authLoginBridgeEnabled = saved;
+    config.publicUrl = savedUrl;
+    await new Promise((r2) => ctx.server.close(r2));
+  }
+});
+
 test('bridge nonce binding: only the registering session can consume (integration findings)', async () => {
   const { config } = await import('../src/config.js');
   const saved = config.authLoginBridgeEnabled;
