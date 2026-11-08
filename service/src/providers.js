@@ -158,6 +158,7 @@ async function resolveFreeTextChat(connection, kind, chatId) {
 export async function rcPostMessage(connection, kind, { chatId, text }) {
   const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind });
+  const rawTarget = String(chatId || '').trim();
   const target = await resolveFreeTextChat(connection, kind, chatId);
   const response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
     headers: {
@@ -169,7 +170,15 @@ export async function rcPostMessage(connection, kind, { chatId, text }) {
   });
   if (!response.ok) {
     const detail = response.json?.message || response.text?.slice(0, 300) || '';
-    throw new HttpError(502, `rc post failed (${response.status}): ${detail}`);
+    // E-197 round 2: an unresolved free-text target surfaces cryptic AGW
+    // errors like "No groupId or personIds passed" — say WHAT actually
+    // failed: the typed name never became a real chat id (bots cannot call
+    // the directory search, so a person/team name must come from a real
+    // chat or from an AsMe-authorized directory match)
+    const unresolvedHint = rawTarget && !/^\d+$/.test(rawTarget)
+      ? `（对象 "${rawTarget}" 未能解析为真实会话：目录搜索不可用或无匹配。请从 Bot 所在会话选择群组，或配置 RingCentral 个人授权后从目录选择联系人）`
+      : '';
+    throw new HttpError(502, `rc post failed (${response.status}): ${detail}${unresolvedHint}`);
   }
   return response.json; // { id, chatId, ... }
 }

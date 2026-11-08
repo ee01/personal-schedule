@@ -1574,9 +1574,11 @@ async function loadTokens() {
 function openConnDlg(key, returnTo) {
   const FIELD_LABELS = { clientId: 'Client ID', clientSecret: 'Client Secret', jwt: 'JWT（Credentials 页下载）', ownChatId: 'ownChatId（通知收件聊天）', token: 'Access Token' };
   const fields = { rc_user: ['clientId', 'clientSecret', 'jwt', 'ownChatId'], rc_bot: ['token'], memory: ['baseUrl', 'userKey'], multica: ['webhookUrl', 'bindingUuid'], jira: ['baseUrl', 'token'] }[key];
+  // E-197 round 2: prefill the JIRA base URL with the deployment default
+  const JIRA_DEFAULT_BASE = 'https://jira.ringcentral.com';
   DLG = { key, returnTo, html: () => `<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm"><div class="mhead"><h3>连接 ${{rc_user:'RingCentral 个人授权',rc_bot:'Bot 凭据',memory:'Memory Service',multica:'Multica',jira:'JIRA'}[key]}</h3></div>
-    <div class="mcontent">${fields.map((f)=>`<div class="field"><label>${esc(FIELD_LABELS[f] || f)}</label><input class="input" id="cfg-${esc(f)}" ${f.toLowerCase().includes('key')||f.toLowerCase().includes('secret')||f==='token'||f==='jwt'?'type=password':''}></div>`).join('')}
-    <div class="muted" style="font-size:12px;line-height:1.6">${{rc_user:'方案 A（AsMe）：Client ID + Client Secret + JWT（开发者控制台 App 的 Credentials 页下载），服务端自动换 token 并续期。ownChatId 为通知收件聊天。',rc_bot:'方案 B：填 Bot App 安装时拿到的长期 Access Token（无需刷新）。',memory:'',multica:'',jira:''}[key]}</div></div>
+    <div class="mcontent">${fields.map((f)=>`<div class="field"><label>${esc(FIELD_LABELS[f] || f)}</label><input class="input" id="cfg-${esc(f)}" ${key === 'jira' && f === 'baseUrl' ? `value="${JIRA_DEFAULT_BASE}" placeholder="${JIRA_DEFAULT_BASE}"` : ''} ${f.toLowerCase().includes('key')||f.toLowerCase().includes('secret')||f==='token'||f==='jwt'?'type=password':''}></div>`).join('')}
+    <div class="muted" style="font-size:12px;line-height:1.6">${{rc_user:'方案 A（AsMe）：Client ID + Client Secret + JWT（开发者控制台 App 的 Credentials 页下载），服务端自动换 token 并续期。ownChatId 为通知收件聊天。',rc_bot:'方案 B：填 Bot App 安装时拿到的长期 Access Token（无需刷新）。',memory:'',multica:'',jira:''}[key]}${key === 'jira' ? ' 不配置个人 Token 时将使用部署全局默认 JIRA 连接。' : ''}</div></div>
     <div class="mfoot"><span class="muted" id="cfgMsg"></span><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn primary" data-act="dlgOk" data-test="1">保存并测试</button></div></div>`,
     onOk: async () => { const value = {}; fields.forEach((f)=>{ value[f] = $('#cfg-'+f).value.trim(); });
       // BUG-59: PUT saves AND verifies server-side; the outcome is explicit —

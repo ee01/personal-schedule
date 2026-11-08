@@ -19,11 +19,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export function buildServices(db) {
   const auth = createAuth(db);
+  // E-197 round 2: deployment-global JIRA credential — users without their
+  // own connection inherit it (per-user connection always wins). Both the
+  // keyed lookup (task gating) and the full map (runner dispatch) must see
+  // the fallback, or a report would gate as ready but dispatch with no JIRA.
+  const globalJira = () => config.jiraGlobalToken
+    ? { baseUrl: config.jiraGlobalBaseUrl, token: config.jiraGlobalToken, _global: true, _verified: 1 }
+    : null;
   const getConnections = (userId, key) => {
     const row = key
       ? db.prepare('SELECT value, verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(userId, key)
       : db.prepare('SELECT key, value FROM connections WHERE user_id = ?').all(userId);
-    if (!row) return null;
+    if (!row) return key === 'jira' ? globalJira() : null;
     if (key) {
       const value = parseJson(row.value, null);
       // BUG-59: carry the verification state so task-missing computation and
@@ -42,6 +49,10 @@ export function buildServices(db) {
     }
     const out = {};
     for (const entry of row) out[entry.key] = parseJson(entry.value, null);
+    if (!out.jira) {
+      const global = globalJira();
+      if (global) out.jira = global;
+    }
     return out;
   };
   const notify = createNotify(db, { publicBaseUrl });

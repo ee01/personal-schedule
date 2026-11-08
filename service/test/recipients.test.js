@@ -77,3 +77,39 @@ test('rcPostMessage resolves free-text recipients at dispatch (E-196)', async ()
     await new Promise((r) => mock.server.close(r));
   }
 });
+
+// E-197 round 2: an unresolved free-text target produces RC's own cryptic
+// AGW error ("No groupId or personIds passed") — the thrown error must say
+// WHAT failed so the run record is self-explanatory.
+test('rcPostMessage failure on unresolved free text explains the real cause (E-197 r2)', async () => {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const send = (status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    if (url.pathname.endsWith('/account/~/extension/~')) return send(200, { id: 'u-1', account: { id: 'tenant-1' } });
+    if (url.pathname.endsWith('/directory/entries/search')) return send(404, { errorCode: 'AGW-404' });
+    if (url.pathname.endsWith('/glip/chats')) return send(200, { records: [] }); // bot is in no matching chat
+    if (url.pathname.endsWith('/glip/posts')) return send(400, { errorCode: 'GLIP-400', message: 'No groupId or personIds passed' });
+    send(404, {});
+  });
+  const base = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
+  const previous = __config.rcTestOrigins;
+  __config.rcTestOrigins = [base];
+  try {
+    const conn = { serverUrl: base, token: 'bot-token', kind: 'bot' };
+    await assert.rejects(
+      rcPostMessage(conn, 'bot', { chatId: 'esone.qiu', text: 'hi' }),
+      (error) => {
+        assert.match(error.message, /No groupId or personIds passed/);
+        assert.match(error.message, /未能解析为真实会话/);
+        assert.match(error.message, /esone\.qiu/);
+        return true;
+      },
+    );
+  } finally {
+    __config.rcTestOrigins = previous;
+    await new Promise((r) => server.close(r));
+  }
+});

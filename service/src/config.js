@@ -47,6 +47,13 @@ export const config = {
     .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
   rcTestOrigins: (process.env.SCHEDULE_RC_TEST_ORIGINS || '')
     .split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
+  // E-197 round 2: deployment-level default JIRA credential (service.env).
+  // Users WITHOUT their own configured connection inherit it — creating an
+  // AI Report is no longer blocked on wiring a personal token first. A
+  // per-user connection always wins (permission/scope differences), and the
+  // base URL also prefills the connection editor.
+  jiraGlobalBaseUrl: (process.env.SCHEDULE_JIRA_GLOBAL_BASE_URL || 'https://jira.ringcentral.com').replace(/\/+$/, ''),
+  jiraGlobalToken: process.env.SCHEDULE_JIRA_GLOBAL_TOKEN || '',
   // Deployment admins (SCHEDULE_ADMIN_EMAILS): the only identities allowed
   // to write deployment-level settings (timeline.*). Binding an email proves
   // account identity, NOT admin rights — default empty means the API accepts

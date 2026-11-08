@@ -748,6 +748,13 @@ function describeRole(type, cfg) {
       out[row.key] = { ...maskSecrets(row.key, value), updated_at: row.updated_at,
         verified: row.verified === null ? 0 : row.verified, verifiedAt: row.verified_at, verifyError: row.verify_error };
     }
+    // E-197 round 2: surface the deployment-global JIRA default when the
+    // user has no personal connection — the UI shows it as the working
+    // credential (创建 AI Report 不再被个人未配置阻塞), masked like any secret
+    if (!out.jira && config.jiraGlobalToken) {
+      out.jira = { ...maskSecrets('jira', { baseUrl: config.jiraGlobalBaseUrl, token: config.jiraGlobalToken }),
+        globalDefault: true, updated_at: null, verified: 1, verifiedAt: null, verifyError: null };
+    }
     return out;
   });
 
