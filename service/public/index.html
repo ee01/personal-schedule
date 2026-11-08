@@ -334,7 +334,7 @@ button.stat:hover{background:var(--surface)}
 .nl input::placeholder{color:var(--text-4)}
 .nl-sug{display:flex;gap:6px;flex-wrap:wrap;margin:-16px 0 24px}
 .typegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
-.typecard{position:relative;display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:var(--r-lg);border:1px solid var(--line-2);background:var(--bg-2);text-align:left;transition:border-color var(--d2),transform var(--d2) var(--ease),background var(--d2);min-height:148px}
+.typecard{position:relative;display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:var(--r-lg);border:1px solid var(--line-2);background:var(--bg-2);text-align:left;transition:border-color var(--d2),transform var(--d2) var(--ease),background var(--d2);min-height:172px}
 .typecard:hover{border-color:var(--line-3);transform:translateY(-1px)}
 .typecard[aria-pressed="true"]{border-color:color-mix(in srgb,var(--c) 60%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--c) 9%,transparent),transparent 70%),var(--bg-2)}
 .typecard .k{position:absolute;top:12px;right:12px}
@@ -344,7 +344,7 @@ button.stat:hover{background:var(--surface)}
 .typecard .req.bad{color:var(--warn)}
 .preview-run{border-radius:var(--r-lg);border:1px solid var(--line);background:var(--bg-2);padding:16px}
 .preview-run .h{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-3);margin-bottom:8px}
-.preview-run .first{font:600 var(--fs-lg) var(--mono);color:var(--primary);letter-spacing:-.02em}
+.preview-run .first{font:600 var(--fs-lg)/22px var(--mono);color:var(--primary);letter-spacing:-.02em}
 .preview-run .rel{font-size:12px;color:var(--text-3)}
 .preview-run .rest{margin-top:12px;display:grid;gap:4px}
 .preview-run .rest div{display:flex;justify-content:space-between;font-size:12px;font-family:var(--mono);color:var(--text-2)}
@@ -570,7 +570,7 @@ mark.sens{background:rgba(242,178,76,.18);color:var(--warn);border-radius:3px;pa
 
 
 /* ---- kept production-only styles (baseline has no equivalent) ---- */
-.guest-pill{background:rgba(255,255,255,.04);color:var(--text-2);border:1px solid var(--line-2);border-radius:999px;padding:2px 10px;font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.guest-pill{background:rgba(255,255,255,.04);color:var(--text-2);border:1px solid var(--line-2);border-radius:999px;padding:0 6px;line-height:15px;font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .guest-pill:hover{color:var(--text);border-color:var(--text-4)}
 /* 已登录身份（E-194）：扩展自动登录/邮箱登录后，胶囊显示账号名并以绿点标识，
    与“单设备模式”明确区分 */
@@ -585,6 +585,11 @@ mark.hl{background:rgba(205,242,107,.25);color:inherit;border-radius:3px;padding
 .tpl-row .input{background:var(--surface)}
 .invalid{border-color:var(--err)!important}
 .countdown,.big{font-family:var(--mono)}
+/* Responsive service details keep the baseline cards within the viewport. */
+.cards > .card{min-width:0}
+.connection-card{min-height:229px}
+.timeline-project{grid-template-columns:minmax(0,1fr) 100px 140px 120px auto;padding:12px 8px}
+@media(max-width:760px){.timeline-project{grid-template-columns:minmax(0,1fr) 84px 28px;gap:8px}.connection-card{min-height:0}.card-h .grow{min-width:0}}
 </style>
 </head>
 <body>
@@ -668,6 +673,8 @@ const $ = (s, el=document) => el.querySelector(s);
 const $$ = (s, el=document) => [...el.querySelectorAll(s)];
 const esc = (s) => { const d = document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; };
 const TYPE_LABEL = { asme:'帮我发 · 以我身份', bot:'帮我发 · Bot 身份', ai_report:'AI 报告', outreach:'帮我问', agent_task:'帮我做', jira_automation:'JIRA 托管' };
+// F5: short display names — asme and bot must differ outside the demo copy
+const TYPE_SHORT = { asme:'帮我发（以我身份）', bot:'帮我发（Bot）', ai_report:'AI 报告', outreach:'帮我问', agent_task:'帮我做', jira_automation:'JIRA 托管' };
 const TYPE_ORDER = ['asme','bot','ai_report','outreach','agent_task'];
 const TYPE_DESC = { asme:'以你的 RingCentral 身份按时发出消息，像你亲手发送一样。', bot:'由团队 Bot 按时播报，适合值班、发布等公共通知。', ai_report:'按时查询 JIRA / 数据源，生成摘要后投递到群或个人。', outreach:'替我向某人发问，自动识别回复、按策略追问，拿到答案后通知你。', agent_task:'把一件事交给 Multica / OpenClaw / Codex worker 定期执行，并回报结果。', jira_automation:'JIRA 托管（扩展侧导入流程待 E-184）' };
 const STATUS_L = { draft:'草稿', inactive:'未启用', pending_review:'等待审核', active:'已排程', paused:'已暂停', completed:'已完成', needs_attention:'需要处理', archived:'已归档' };
@@ -730,7 +737,7 @@ function tzLabel(tz) {
 }
 function countdownTick() {
   // BUG-28: correct countdown format
-  document.querySelectorAll('.countdown').forEach((el) => {
+  document.querySelectorAll('.countdown,.stat-countdown').forEach((el) => {
     const at = Number(el.dataset.at);
     if (!at) return;
     const ms = at * 1000 - Date.now();
@@ -760,7 +767,7 @@ function fmtNext(sec, tz){ if(!sec) return '—'; const rel=(()=>{ const ms=sec*
 function toast(msg, o={}){ const t=document.createElement('div'); t.className='toast '+(o.kind||'ok'); t.innerHTML=`<div class="t-b">${msg}</div>`+(o.undo?`<button class="btn ghost sm" data-undo>撤销</button>`:''); $('#toasts').appendChild(t); const undo=o.undo; if(o.undo) t.querySelector('[data-undo]').onclick=()=>{ undo(); t.remove(); }; setTimeout(()=>t.remove(), o.stay||5000); }
 function confirmDlg({title,body,ok='确定',danger,onOk}){ DLG={html:()=>`<div class="modal-wrap"><div class="scrim" data-act="dlgClose"></div><div class="modal sm" role="alertdialog" aria-modal="true"><div class="mhead"><h3>${title}</h3></div><div class="mcontent" style="color:var(--text-2)">${body}</div><div class="mfoot"><span class="spacer"></span><button class="btn ghost" data-act="dlgClose">取消</button><button class="btn ${danger?'danger':'primary'}" data-act="dlgOk" autofocus>${ok}</button></div></div></div>`,onOk}; renderModal(); setTimeout(()=>$('#modalLayer [data-act="dlgOk"]')?.focus(),30); }
 function closeDlg(){ DLG=null; renderModal(); }
-function openMenu(anchor, html, onClick){ closeMenu(); const m=document.createElement('div'); m.className='menu'; m.innerHTML=html; document.body.appendChild(m); const r=anchor.getBoundingClientRect(); const w=m.offsetWidth||180; m.style.left=Math.min(window.innerWidth-w-12, Math.max(12,r.left-(w-r.width)))+'px'; m.style.top=Math.min(window.innerHeight-m.offsetHeight-12, r.bottom+6)+'px'; MENU={el:m,onClick,anchor}; }
+function openMenu(anchor, html, onClick){ closeMenu(); const m=document.createElement('div'); m.className='menu'; m.innerHTML=html; document.body.appendChild(m); const r=anchor.getBoundingClientRect(); const w=m.offsetWidth||180; m.style.left=Math.min(window.innerWidth-w-12, Math.max(12,r.left))+'px'; m.style.top=Math.min(window.innerHeight-m.offsetHeight-12, r.bottom+6)+'px'; MENU={el:m,onClick,anchor}; }
 function closeMenu(){ if(MENU){ MENU.el.remove(); MENU=null; } }
 document.addEventListener('click', (e)=>{
   if(MENU){ const item=e.target.closest && e.target.closest('.m-item');

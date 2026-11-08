@@ -83,7 +83,7 @@ function renderCrumb() {
     else if (S.sub === 'archived') sub = '已归档';
     else if (S.sub === 'ungrouped') sub = '未分组';
     else if (S.sub.startsWith('tag:')) sub = '#' + (S.tags.find((t) => t.id === S.sub.slice(4))?.name || '');
-    else if (S.sub.startsWith('type:')) sub = (TYPE_LABEL[S.sub.slice(5)] || '').split(' ')[0];
+    else if (S.sub.startsWith('type:')) sub = (TYPE_SHORT[S.sub.slice(5)] || '');
   }
   $('#crumb').innerHTML = `<h1>${esc(sub || label)}</h1>`;
   $('#searchBox').style.display = S.view === 'tasks' ? '' : 'none';
@@ -120,14 +120,14 @@ function renderSidebar() {
     <div id="tagList"></div>
   </nav>
   <div class="side-foot">
-    <button class="conn-strip" data-nav="connections">${ic('server','sm')} Runner 在线 · 单一调度器<span class="dots" id="connDots"></span></button>
+    <button class="conn-strip" data-nav="connections" title="Runner · 单一调度器">${ic('server','sm')} Runner<span class="dots" id="connDots"></span></button>
   </div>`;
   const list = [];
   if (typeMode) {
-    for (const ty of TYPE_ORDER) list.push(`<button class="nav-item" data-nav="tasks/type:${ty}" aria-current="${typePart===ty}">${typeIc(ty)} ${esc(TYPE_LABEL[ty].split(' ')[0])}<span class="count">${countBy((t)=>t.type===ty)}</span></button>`);
+    for (const ty of TYPE_ORDER) list.push(`<button class="nav-item" data-nav="tasks/type:${ty}" aria-current="${typePart===ty}">${typeIc(ty)} ${esc(TYPE_SHORT[ty])}<span class="count">${countBy((t)=>t.type===ty)}</span></button>`);
   } else {
+    for (const tag of S.tags) list.push(`<div class="row" style="gap:0"><button class="nav-item" data-nav="tasks/tag:${tag.id}" aria-current="${tagPart===tag.id}"><span class="tag-dot" style="background:${tag.color||'#cdf26b'}"></span> ${esc(tag.name)}<span class="count">${countBy((t)=>t.tags?.some(x=>x.id===tag.id))}</span></button><button class="btn ghost icon menu-trigger" data-tagmenu="${tag.id}" aria-label="Tag 菜单" style="width:24px;height:24px;margin-left:2px">${ic('more','sm')}</button></div>`);
     list.push(`<button class="nav-item" data-nav="tasks/ungrouped" aria-current="${S.sub==='ungrouped'}">${ic('tag','sm')} 未分组<span class="count">${countBy((t)=>!(t.tags||[]).length)}</span></button>`);
-    for (const tag of S.tags) list.push(`<div class="row" style="align-items:center"><button class="nav-item grow" data-nav="tasks/tag:${tag.id}" aria-current="${tagPart===tag.id}"><span class="tag-dot" style="background:${tag.color||'#cdf26b'}"></span> ${esc(tag.name)}<span class="count">${countBy((t)=>t.tags?.some(x=>x.id===tag.id))}</span></button><button class="btn ghost icon menu-trigger" data-tagmenu="${tag.id}" aria-label="Tag 菜单" style="width:28px;height:28px">${ic('more','sm')}</button></div>`);
     list.push(`<button class="nav-item" id="sideNewTag">${ic('plus','sm')} 新建 Tag</button>`);
     if (S.archived && S.archived.length) list.push(`<button class="nav-item" data-nav="tasks/archived" aria-current="${S.sub==='archived'}">${ic('archive','sm')} 已归档<span class="count">${S.archived.length}</span></button>`);
   }
@@ -210,7 +210,7 @@ function rowHTML(t) {
     ${typeIc(t.type)}
     <div style="min-width:0">
       <div class="title">${esc(t.title)}${src?`<span class="src">${src==='Glip'?ic('alarm','sm'):src==='JIRA'?ic('jira','sm'):ic('download','sm')}${src}</span>`:''}</div>
-      <div class="meta">${esc((TYPE_LABEL[t.type]||t.type).split(' ')[0])} · ${esc(rcp || '未设置收件人')}${(t.missing||[]).length?` · <span style="color:var(--warn)">缺 ${(t.missing||[]).length} 项配置</span>`:''}</div>
+      <div class="meta">${esc(TYPE_SHORT[t.type]||t.type)} · ${esc(rcp || '未设置收件人')}${(t.missing||[]).length?` · <span style="color:var(--warn)">缺 ${(t.missing||[]).length} 项配置</span>`:''}</div>
     </div>
     <div class="tags">${tags||'<span class="muted" style="font-size:12px">—</span>'}</div>
     <div class="next">${nextCell}</div>
@@ -242,12 +242,12 @@ function pageTasks() {
   const soonest = actives.filter((t) => t.next_run_at).sort((a, b) => a.next_run_at - b.next_run_at)[0];
   const stats = isAll ? `
     <div class="stats">
-      <div class="stat next"><div class="k">${ic('clock','sm')} 下一次运行</div><div class="v countdown" data-at="${soonest ? soonest.next_run_at : ''}">${soonest ? fmtNextText(soonest.next_run_at, soonest.timezone) : '—'}</div><div class="s">${soonest ? esc(soonest.title) : '暂无已排程任务'}</div></div>
+      <div class="stat next"><div class="k">${ic('clock','sm')} 下一次运行</div><div class="v stat-countdown" data-at="${soonest ? soonest.next_run_at : ''}">${soonest ? fmtNextText(soonest.next_run_at, soonest.timezone) : '—'}</div><div class="s">${soonest ? esc(soonest.title) : '暂无已排程任务'}</div></div>
       <button class="stat" data-filter="active"><div class="k"><span class="dot" style="color:var(--ok);width:6px;height:6px"></span> 已排程</div><div class="v">${actives.length}</div><div class="s">查看</div></button>
       <button class="stat" data-filter="needs_attention"><div class="k"><span class="dot" style="color:var(--err);width:6px;height:6px"></span> 需要处理</div><div class="v" style="color:${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')?'var(--err)':''}">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s">查看</div></button>
       <button class="stat" data-nav="setup"><div class="k"><span class="dot" style="color:var(--warn);width:6px;height:6px"></span> 待补全</div><div class="v" style="color:${countBy((t)=>t.status==='inactive')?'var(--warn)':''}">${countBy((t)=>t.status==='inactive')}</div><div class="s">去补全</div></button>
     </div>` : '';
-  const chips = [...S.filterStatus.map((s2)=>`<button class="chip" aria-pressed="true" data-rm-s="${s2}">${STATUS_L[s2]} ${ic('x','sm')}</button>`), ...S.filterType.map((t)=>`<button class="chip" aria-pressed="true" data-rm-t="${t}">${(TYPE_LABEL[t]||'').split(' ')[0]} ${ic('x','sm')}</button>`)];
+  const chips = [...S.filterStatus.map((s2)=>`<button class="chip" aria-pressed="true" data-rm-s="${s2}">${STATUS_L[s2]} ${ic('x','sm')}</button>`), ...S.filterType.map((t)=>`<button class="chip" aria-pressed="true" data-rm-t="${t}">${(TYPE_SHORT[t]||'')} ${ic('x','sm')}</button>`)];
   const toolbar = `
     <div class="toolbar">
       <button class="fbtn ${S.filterStatus.length?'on':''}" data-menu="fs">${ic('filter','sm')} 状态${S.filterStatus.length?` · ${S.filterStatus.length}`:''}</button>
@@ -329,7 +329,7 @@ function weekHTML(list) {
 }
 function emptyState() {
   if (S.q || S.filterStatus.length || S.filterType.length) return `<div class="empty"><div class="e-ic">${ic('search')}</div><div class="e-t">没有匹配的任务</div><button class="btn ghost" data-clear="1">清除筛选</button></div>`;
-  if (S.sub.startsWith('type:')) return `<div class="empty"><div class="e-ic">${typeIc(S.sub.slice(5), true)}</div><div class="e-t">还没有${esc(TYPE_LABEL[S.sub.slice(5)])}任务</div><button class="btn primary" data-new-type="${S.sub.slice(5)}">新建${esc(TYPE_LABEL[S.sub.slice(5)].split(' ')[0])}任务</button></div>`;
+  if (S.sub.startsWith('type:')) return `<div class="empty"><div class="e-ic">${typeIc(S.sub.slice(5), true)}</div><div class="e-t">还没有${esc(TYPE_LABEL[S.sub.slice(5)])}任务</div><button class="btn primary" data-new-type="${S.sub.slice(5)}">新建${esc(TYPE_SHORT[S.sub.slice(5)])}任务</button></div>`;
   if (S.sub.startsWith('tag:')) return `<div class="empty"><div class="e-ic">${ic('plus')}</div><div class="e-t">这个 Tag 下还没有任务</div><button class="btn primary" data-new-tag="${S.sub.slice(4)}">新建并加入此 Tag</button></div>`;
   return `<div class="empty"><div class="e-ic">${ic('clock')}</div><div class="e-t">还没有计划任务</div><div class="e-s">试试一句话创建：「每周一 10:00 提醒 #平台周会 发布检查」</div><button class="btn primary" id="btnNew2">新建计划任务</button></div>`;
 }
@@ -440,7 +440,10 @@ function drawerHTML() {
         <button class="btn danger ghost" data-op="delete">删除</button>`}
   </div>`;
 }
+let TL_BUSY = null;
 function offText(off) { off = +off || 0; if (off === 0) return '当天'; return (off < 0 ? '前 ' : '后 ') + Math.abs(off) + ' 天'; }
+// F4: how long ago an instant happened ("38 分钟前"), for cache freshness
+function ageText(sec) { const ms = Date.now() - sec * 1000; if (ms < 0) return '刚刚'; const mm = Math.floor(ms / 6e4); if (mm < 60) return mm + ' 分钟'; const hh = Math.floor(mm / 60); if (hh < 24) return hh + ' 小时'; return Math.floor(hh / 24) + ' 天'; }
 function renderDrawer() {
   const host = $('#layer');
   if (!host.dataset.ready) { host.innerHTML = '<div id="drawerLayer"></div><div id="modalLayer"></div>'; host.dataset.ready = 1; }
@@ -481,7 +484,7 @@ function newFlow(type, prefill = {}) {
     time: prefill.spec && prefill.spec.kind ? timeFromSpec(prefill.spec) : defaultTime() };
   renderModal();
 }
-function stepTitles() { return ['类型', '内容', '对象与投递', '时间', '确认']; }
+function stepTitles() { return ['类型', '内容', '对象', '时间', '确认']; }
 function doneModalHTML() {
   const d = CF.done;
   const st = d.status === 'active' ? '已排程' : d.status === 'inactive' ? '待补全' : (STATUS_L[d.status] || d.status);
@@ -502,11 +505,11 @@ function createModalHTML() {
   const edit = Boolean(CF.editing);
   const stepLabel = (i) => i === 2 && CF.type === 'agent_task' ? '执行与投递' : stepTitles()[i];
   const stepValue = (i) => {
-    if (i === 0) return CF.type ? TYPE_LABEL[CF.type].split(' ')[0] : '未选';
-    if (i === 1) return (CF.title || CF.content || '').slice(0, 12) || '待填';
-    if (i === 2) return (CF.recipients.map((r) => r.name || r.raw || '未解析').slice(0, 4).join('、')) || (CF.type === 'agent_task' ? '默认执行器' : '待设置');
+    if (i === 0) return CF.type ? TYPE_LABEL[CF.type] : '';
+    if (i === 1) return (CF.title || CF.content || '').slice(0, 18);
+    if (i === 2) return CF.type ? (CF.recipients.map((r) => r.name || r.raw || '未解析').slice(0, 4).join('、')) || (CF.type === 'agent_task' ? '默认执行器' : '') : '';
     if (i === 3) return CF.time ? ({ daily:'每天', weekdays:'工作日', weekly:'每周', monthly:'每月', once:'一次', timeline:'Timeline', rate:'间隔' }[CF.time.freq] || '每天') : '每天';
-    return '核对后保存';
+    return '';
   };
   const steps = stepTitles().map((t, i) => { const done = i < CF.step - 1;
     return `<button class="step ${CF.step===i+1?'cur':''} ${done?'done':''}" data-step="${i+1}" ${(edit && i === 0) ? 'disabled' : ''}>
@@ -516,14 +519,15 @@ function createModalHTML() {
     <aside class="steps"><div class="ttl">${edit?'编辑任务':'新建计划任务'}</div><div class="sub">${edit?'类型不可修改；改类型请新建':'每步一件事，随时可回退'}</div>${steps}
       <div class="foot">${CF.lastDraftId||CF.editing?'<span class="saved-dot"></span> 草稿已自动保存':'可先存草稿，再回来补全'}</div></aside>
     <section class="mbody">
-      <div class="mhead"><h3 id="cfHead">${stepLabel(CF.step - 1)}</h3><span class="pill ghost">${CF.step} / 5</span><span class="grow"></span>
-        ${CF.type?`<span class="pill">${typeIc(CF.type,'sm')} ${esc(TYPE_LABEL[CF.type].split(' ')[0])}</span>`:''}
+      <div class="mhead"><h3 id="cfHead">${stepLabel(CF.step - 1)}</h3><span class="pill ghost mobile-steps">${CF.step} / 5</span><span class="grow"></span>
+        ${CF.type?`<span class="pill">${typeIc(CF.type,'sm')} ${esc(({asme:'As me',bot:'Bot',ai_report:'AI Report',outreach:'帮我问',agent_task:'帮我做'})[CF.type]||TYPE_SHORT[CF.type])}</span>`:''}
         <button class="btn ghost icon" data-act="cancelCf" aria-label="关闭（Esc）">${ic('x')}</button></div>
       <div class="mcontent scroll" id="cfPane"></div>
       <div class="mfoot" id="cfFoot">
         ${CF.step > 1 && !(edit && CF.step === 2) ? '<button class="btn ghost" data-prev>‹ 上一步</button>' : ''}
         <span class="spacer"></span>
         ${CF.step === 5 && !edit ? '<button class="btn" data-savedraft>存为草稿</button>' : ''}
+        ${edit && CF.step !== 5 ? '<button class="btn" data-skiptoconfirm>跳到确认</button>' : ''}
         <button class="btn primary" data-next style="${CF.step===5?'display:none':''}">继续 <kbd>⌘↵</kbd></button>
         <button class="btn primary" data-finish style="${CF.step===5?'':'display:none'}">${edit?'保存修改':'保存并排程'}</button>
       </div>
@@ -535,9 +539,12 @@ function renderCfPane() {
   pane.innerHTML = `<div class="step-pane">${CF.step === 1 ? cfStep1() : CF.step === 2 ? cfStep2() : CF.step === 3 ? cfStep3() : CF.step === 4 ? cfStep4() : cfStep5()}</div>`;
   if (CF.step === 1) $$('#modalLayer [data-pick]').forEach((b) => b.onclick = () => { CF.type = b.dataset.pick; CF.spec = null; CF.step = 2; renderModal(); });
   wireCfPane();
+  if (CF.step === 1) $('#cfOne')?.focus();
+  else if (CF.step === 2) $('#cfContent')?.focus();
+  else if (CF.step === 3) $('#recInput')?.focus();
 }
 function cfStep1() {
-  const chips = ['每天 9:00 提醒我站会', '每周五 17:00 给 #平台周会 发周报', '帮我问 Eason 本周五前确认发布时间', '每天 10:00 查询阻塞工单并发到 #值班群', 'mThor FF 前 1 天 10:00 提醒冻结', '每周五 10:00 帮我做 依赖漏洞巡检'];
+  const chips = ['每周一 9:30 在 #平台周会 提醒大家更新周报','mThor FF 前 1 天 10:00 在 #release-train 提醒冻结','帮我问 Priya 下周五前 SSO 切换窗口定了没','工作日 18:00 发 Sprint 风险日报到 #平台周会','每周五 10:00 帮我做 依赖漏洞巡检','每周一 10:00 帮我做 查询 PLAT 阻塞工单，按模板发到 #平台周会'];
   return `<div class="nl"><span style="color:var(--primary);display:flex">${ic('sparkle')}</span>
     <label class="sr-only" for="cfOne">一句话创建</label>
     <input id="cfOne" placeholder="一句话描述，或按 1–5 直接选类型" value="${esc(CF.oneLine)}" autocomplete="off">
@@ -547,7 +554,7 @@ function cfStep1() {
     <div class="typegrid" role="radiogroup" aria-label="任务类型">
       ${TYPE_ORDER.map((k, i) => { const bad = (k === 'outreach' || k === 'agent_task') && connStateOf('memory') !== 'ok';
         return `<button class="typecard" role="radio" style="--c:var(--t-${k==='ai_report'?'report':(k==='agent_task'?'agent':(k==='jira_automation'?'report':k))})" aria-pressed="${CF.type===k}" data-pick="${k}">
-        <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_LABEL[k].split(' ')[0])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
+        <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_SHORT[k])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
         <div class="req">${bad?ic('alert','sm')+' 未连接 Memory：可创建，保存为未启用':ic('check','sm')}</div></button>`; }).join('')}
     </div>`;
 }
@@ -561,7 +568,7 @@ async function tryOneLine(text) {
   // BUG-04: 每天 H:M 是每天固定时刻 → cron，不是 540 分钟间隔
   let spec = null;
   if (at) {
-    const hh = +at[2] || 9, mm = +at[3] || 0, expr = mm + ' ' + hh + ' * * ';
+    const hh = Number(at[2]), mm = +at[3] || 0, expr = mm + ' ' + hh + ' * * ';
     if (/每天/.test(at[1])) spec = { kind: 'cron', expr: expr + '*', timezone: 'Asia/Shanghai' };
     else if (/工作日/.test(at[1])) spec = { kind: 'cron', expr: expr + '1-5', timezone: 'Asia/Shanghai' };
     else if (/每周/.test(at[1])) { const DW = { '一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'日':0,'天':0 }; const w = DW[at[1].slice(2)] ?? 1; spec = { kind: 'cron', expr: expr + w, timezone: 'Asia/Shanghai' }; }
@@ -606,22 +613,22 @@ function freeTextRecipient(raw) {
 }
 function cfStep2() {
   if (!CF.type) { CF.step = 1; return cfStep1(); }
-  const varChips = `<div class="row" style="gap:6px;margin-top:6px">${['date','time','datetime','weekday','title'].map((v)=>`<button class="chip" data-var="{{${v}}}">{{${v}}}</button>`).join('')}</div>
-    <div class="muted" style="margin-top:4px">变量在发送时刻按任务时区替换；点击插入到光标处。</div>`;
+  const varChips = `<div class="row wrap"><span class="hint" title="变量在发送时按任务时区替换">插入变量</span>${['date','time','datetime','weekday','title'].map((v)=>`<button class="chip" style="height:24px" data-var="{{${v}}}"><span class="mono">{{${v}}}</span></button>`).join('')}</div>
+    `;
   const body = {
-    asme: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="要发送的内容，可插入变量">${esc(CF.content)}</textarea>${varChips}
-      <div class="content-box" style="margin-top:8px"><div class="cb-h">发送时预览（按当前时间规则的下一次运行替换变量）</div><div class="muted" id="varPrev" style="white-space:pre-wrap"></div></div>
-      <div class="muted" style="margin-top:4px">支持 @对象 提及（发送时转为真实 mention）</div></div>`,
-    bot: `<div class="field"><label>消息内容</label><textarea class="input" id="cfContent" placeholder="Bot 要播报的内容">${esc(CF.content)}</textarea>${varChips}
-      <div class="content-box" style="margin-top:8px"><div class="cb-h">发送时预览</div><div class="muted" id="varPrev" style="white-space:pre-wrap"></div></div></div>`,
+    asme: `<div class="field"><label>消息内容</label><textarea class="textarea" id="cfContent" placeholder="要发送的内容，可插入变量">${esc(CF.content)}</textarea>${varChips}
+      </div><div class="field"><span class="label">预览 · 按下次运行渲染</span><div class="content-box" id="varPrev"></div>
+      </div>`,
+    bot: `<div class="field"><label>消息内容</label><textarea class="textarea" id="cfContent" placeholder="Bot 要播报的内容">${esc(CF.content)}</textarea>${varChips}
+      </div><div class="field"><span class="label">预览 · 按下次运行渲染</span><div class="content-box" id="varPrev"></div></div>`,
     ai_report: `<div class="field"><label>JQL</label><input class="input" id="cfJql" value="${esc(CF.config?.jql||'')}" placeholder="如：project = X AND sprint in openSprints()"></div><div class="field"><label>空结果策略</label><div class="seg" id="cfEmpty"><button class="seg-b ${(CF.config?.emptyPolicy||'send')==='send'?'on':''}" data-empty="send">发送摘要</button><button class="seg-b ${(CF.config?.emptyPolicy||'silent')==='silent'?'on':''}" data-empty="silent">静默</button></div><div class="muted" style="margin-top:4px">报告模板选填：不填则按内置摘要格式生成。</div></div>`,
-    outreach: `<div class="field"><label>问题</label><textarea class="input" id="cfContent" placeholder="想问对方的问题">${esc(CF.content)}</textarea></div>
+    outreach: `<div class="field"><label>问题</label><textarea class="textarea" id="cfContent" placeholder="想问对方的问题">${esc(CF.content)}</textarea></div>
       <div class="field"><label>完成标准</label><input class="input" id="cfGoal" value="${esc(CF.config?.goal||'')}"></div>
       <div class="field"><label>追问策略</label><div class="row"><input class="input" id="cfMax" type="number" value="${CF.config?.maxFollowup ?? 2}" style="width:90px"> 次 × <input class="input" id="cfGap" type="number" value="${CF.config?.followupIntervalSeconds ?? 7200}" style="width:110px"> 秒</div></div>`,
-    agent_task: `<div class="field"><label>执行指令（只描述要做什么）</label><textarea class="input" id="cfContent" placeholder="通知谁、输出格式在下一步设置">${esc(CF.content)}</textarea></div>
+    agent_task: `<div class="field"><label>执行指令（只描述要做什么）</label><textarea class="textarea" id="cfContent" placeholder="通知谁、输出格式在下一步设置">${esc(CF.content)}</textarea></div>
       <div class="field"><label>模式</label><div class="choice-row"><button class="choice" data-mode="read">只读</button><button class="choice" data-mode="write">可写</button></div></div>`,
   }[CF.type] || '';
-  return `<div class="field"><label>标题（选填，不填自动生成）</label><input class="input" id="cfTitle" value="${esc(CF.title)}"></div>${body}${CF.type === 'ai_report' && connStateOf('jira') !== 'ok' ? '<div class="alert warn">AI Report（JQL 数据源）需要 JIRA 连接（尚未配置），未配置前任务会保持待补全。<button class="btn ghost sm" data-configjira>现在配置</button></div>' : ''}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
+  return `${body}<div class="field"><label>标题</label><input class="input" id="cfTitle" placeholder="不填会根据内容自动生成" value="${esc(CF.title)}"></div>${CF.type === 'ai_report' && connStateOf('jira') !== 'ok' ? '<div class="alert warn">AI Report（JQL 数据源）需要 JIRA 连接（尚未配置），未配置前任务会保持待补全。<button class="btn ghost sm" data-configjira>现在配置</button></div>' : ''}<div class="muted" id="cfErr" style="color:var(--err)"></div>`;
 }
 function chip(rec, i) {
   // BUG-44: an id-only recipient (API/import created) keeps its identity and
@@ -633,10 +640,10 @@ function cfStep3() {
   if (['asme','bot','ai_report'].includes(CF.type)) {
     const hasBot = ['bot','ai_report'].includes(CF.type);
     return `<div class="field"><label>收件人</label>
-      <div class="chips-input" id="recBox">${CF.recipients.map(chip).join('')}<input id="recInput" placeholder="输入姓名、邮箱或群名后回车…" autocomplete="off"></div>
-      <div class="picker" id="recPicker"></div>
+      <div class="picker"><div class="box" id="recBox">${CF.recipients.map(chip).join('')}<input id="recInput" placeholder="输入姓名、邮箱或群名后回车…" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="recPicker"></div>
+      <div class="opts menu" id="recPicker" role="listbox" hidden></div></div>
       <div class="alert warn" id="recNoMatch" style="display:none">没有匹配的对象——可直接回车按输入文本添加（如 esone.qiu → Esone Qiu），发送时按原文投递。</div></div>
-      ${hasBot ? botPickerHTML() : `<div class="field"><label>发送身份</label><div class="choice-row"><button class="choice" data-ident="user">以我的身份</button></div></div>`}
+      ${hasBot ? botPickerHTML() : `<div class="field"><label>发送身份</label><div class="choice-row"><button class="choice" style="appearance:none" data-ident="user" aria-pressed="${CF.identity==='user'}"><span class="radio-dot"></span><span><span class="t">以我的身份</span><span class="d" style="display:block">使用本人 RingCentral 授权投递</span></span></button></div></div>`}
       ${CF.type === 'asme' || (CF.type === 'ai_report' && CF.identity !== 'bot') ? rcUserHint() : ''}`;
   }
   // 帮我问：单人 + 不能选自己
@@ -719,7 +726,7 @@ function specFromTime() {
   if (t.freq === 'rate') return { kind: 'rate', intervalMinutes: Math.max(1, +t.rate || 60), timezone: t.tz };
   if (t.freq === 'daily') return { kind: 'cron', expr: `${head} * * *`, timezone: t.tz };
   if (t.freq === 'weekdays') return { kind: 'cron', expr: `${head} * * 1-5`, timezone: t.tz };
-  if (t.freq === 'weekly') return { kind: 'cron', expr: `${head} * * ${+t.dow || 1}`, timezone: t.tz };
+  if (t.freq === 'weekly') return { kind: 'cron', expr: `${head} * * ${(+t.dow || 1) === 7 ? 0 : +t.dow || 1}`, timezone: t.tz };
   if (t.freq === 'monthly') return { kind: 'cron', expr: `${head} ${+t.dom || 1} * *`, timezone: t.tz };
   if (t.freq === 'timeline') {
     if (!t.project || !t.milestone) return null;
@@ -748,7 +755,7 @@ function cfStep4() {
       <div class="field"><span class="label">频率</span><span class="seg" role="group" aria-label="频率" id="freqSeg"><span class="thumb"></span>${KINDS4.map(([k,l])=>`<button aria-pressed="${t.freq===k}" data-fq="${k}">${l}</button>`).join('')}</span></div>
       ${t.freq==='timeline'?tlFieldsHTML(t):''}
       ${t.freq==='monthly'?`<div class="field"><label for="fDom">每月几号</label><select class="select" id="fDom" style="max-width:160px">${Array.from({length:28},(_,i)=>`<option value="${i+1}" ${+t.dom===i+1?'selected':''}>${i+1} 日</option>`).join('')}</select><span class="hint">为避免月份天数差异，最多到 28 日。</span></div>`:''}
-      ${t.freq==='weekly'?`<div class="field"><label for="fDow">每周几</label><select class="select" id="fDow" style="max-width:160px">${'一二三四五六日'.split('').map((d,i)=>`<option value="${i+1}" ${+t.dow===i+1?'selected':''}>周${d}</option>`).join('')}</select></div>`:''}
+      ${t.freq==='weekly'?`<div class="field"><span class="label">哪几天</span><div class="daychips">${[1,2,3,4,5,6,0].map((w,i)=>`<button aria-pressed="${(Number(t.dow ?? 1)%7)===w}" data-day="${w}" aria-label="周${'一二三四五六日'[i]}">${'一二三四五六日'[i]}</button>`).join('')}</div></div>`:''}
       ${t.freq==='rate'?`<div class="field" style="max-width:260px"><label for="fRate">间隔（分钟）</label><input class="input mono" type="number" id="fRate" value="${+t.rate || 60}"></div>`:''}
       <div class="row" style="gap:16px;align-items:flex-start">
         ${t.freq==='once'?`<div class="field grow"><label for="fWhen">日期</label><input class="input mono" type="datetime-local" id="fWhen" value="${esc(t.when || '')}"></div>`:''}
@@ -760,15 +767,17 @@ function cfStep4() {
   </div>`;
 }
 function tlFieldsHTML(t) {
+  if (!t.project) t.project = (S.timeline.find((p) => p.configured) || S.timeline[0])?.id || '';
   const proj = S.timeline.find((p) => p.id === t.project);
   const milestones = (proj?.milestones || []);
+  if (!t.milestone && milestones.length) t.milestone = (milestones.find((m) => m.date) || milestones[0]).name;
   return `<div class="field"><label for="fProject">项目</label><select class="select" id="fProject">${S.timeline.map((p)=>`<option value="${esc(p.id)}" ${t.project===p.id?'selected':''}>${esc(p.name)}${p.currentRelease?'（当前版本 '+esc(p.currentRelease)+'）':'（暂无数据）'}</option>`).join('')}</select></div>
     <div class="field"><label for="fMile">里程碑 <span class="muted" style="font-weight:400">· ${proj?.currentRelease?'当前版本 '+esc(proj.currentRelease):'该项目暂无版本数据'}</span></label>
       <select class="select" id="fMile">${milestones.length?milestones.map((m)=>`<option value="${esc(m.name)}" ${t.milestone===m.name?'selected':''} ${m.date?'':'disabled'}>${esc(m.name)}${m.date?' · '+m.date.slice(5).replace('-','/'):' ·（等待数据）'}</option>`).join(''):'<option value="" disabled>（暂无数据）</option>'}</select></div>
     <div class="field"><span class="label">相对里程碑</span><div class="row">
-      <button class="btn icon" data-off="-" aria-label="提前一天">−</button>
+      <button class="btn icon" style="border-color:var(--line-2);background:var(--surface-2)" data-off="-" aria-label="提前一天">−</button>
       <span class="mono" style="min-width:96px;text-align:center;font-size:15px">${offText(t.off)}</span>
-      <button class="btn icon" data-off="+" aria-label="推后一天">＋</button>
+      <button class="btn icon" style="border-color:var(--line-2);background:var(--surface-2)" data-off="+" aria-label="推后一天">＋</button>
       <span class="hint">范围 −30 ～ +30 天</span></div></div>`;
 }
 function timePreviewHTML() {
@@ -780,20 +789,23 @@ function timePreviewHTML() {
     const ms = (proj?.milestones || []).find((m) => m.name === s2.milestone);
     const next = nextAtForTimeline(s2);
     const src = `<div class="tz2" style="display:grid;gap:8px">
-      <div class="row" style="gap:6px">${ic('server','sm')}<span class="grow">Release Info 接口 · ${proj?.fetchedAt?relText(proj.fetchedAt)+'前刷新':'未取到数据'}</span></div>
+      <div class="row" style="gap:6px">${ic('server','sm')}<span class="grow">Release Info 接口 · ${proj?.fetchedAt?ageText(proj.fetchedAt)+'前刷新':'未取到数据'}</span><button class="btn ghost sm" data-tlrefresh="${esc(s2.project||'')}" ${TL_BUSY===s2.project?'disabled':''}>${ic('refresh','sm')} 刷新</button></div>
       <div class="row" style="gap:6px">${ic('info','sm')}版本切换后按新版本日期自动重算；同一「版本 + 里程碑」只执行一次。</div></div>`;
     if (!ms || !ms.date) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--warn)">等待 ${esc(s2.milestone)} 日期</div><div class="rel">${esc(s2.project)} ${esc(proj?.currentRelease||'')} 还没有 ${esc(s2.milestone)} 日期，出现后自动排程。</div>${src}`;
     const past = !next || next <= Math.floor(Date.now() / 1000);
     return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
-      <div class="first" style="${past?'color:var(--text-3)':''}">${next?fmtNextText(next, tz):'本版本已过'}</div>
+      <div class="first" style="${past?'color:var(--text-3)':''}">${next?fmtWall(next, tz):'本版本已过'}</div>
       <div class="rel">${past?'这个版本的触发时间已过，下个版本发布日期出来后自动排程':relText(next)}</div>
       <div class="rest"><div><span>${esc(s2.project)} ${esc(proj?.currentRelease||'')} · ${esc(s2.milestone)}</span><span>${ms.date.slice(5).replace('-','/')}</span></div><div><span>${offText(s2.offsetDays||0)}</span><span>${s2.time}</span></div></div>${src}`;
   }
   const list = nextRunsOf({ timezone: tz, status: 'active', next_run_at: null, scheduleSpec: s2, type: CF.type }, 4);
   if (!list.length) return `<div class="h"><span>下次运行</span></div><div class="first" style="color:var(--err)">—</div><div class="rel">没有未来的运行时间</div>`;
+  // F3: fmtNextText already appends "· N 天后" — the rel line carries the
+  // schedule description only, no duplicated relative time
+  const wall0 = fmtWall(list[0], tz);
   return `<div class="h"><span>下次运行</span><span class="mono">${tzLabel(tz)}</span></div>
-    <div class="first">${fmtNextText(list[0], tz)}</div><div class="rel">${relText(list[0])} · ${esc(specText({ scheduleSpec: s2 }))}</div>
-    ${list.length>1?`<div class="rest">${list.slice(1).map((x)=>`<div><span>${fmtNextText(x, tz)}</span><span class="muted">${relText(x)}</span></div>`).join('')}</div>`:`<div class="rest"><div><span class="muted">一次性任务，运行后自动完成</span></div></div>`}`;
+    <div class="first">${wall0}</div><div class="rel">${relText(list[0])} · ${esc(specText({ scheduleSpec: s2 }))}</div>
+    ${list.length>1?`<div class="rest">${list.slice(1).map((x)=>`<div><span>${fmtWall(x, tz)}</span><span class="muted">${relText(x)}</span></div>`).join('')}</div>`:`<div class="rest"><div><span class="muted">一次性任务，运行后自动完成</span></div></div>`}`;
 }
 function cfStep5() {
   const spec = currentSpec();
@@ -805,11 +817,11 @@ function cfStep5() {
     ${CF.highlights && CF.highlights.length ? `<div class="nl-recog">${ic('sparkle','sm')} 已从一句话识别：${CF.highlights.map((h) => `<span class="pill lime">${esc(h.label)}</span>`).join('')}</div>` : ''}
     ${unres.length ? `<div class="alert warn">${ic('alert')}<div>有未解析的收件人（原文已保留：${unres.map((r) => esc(r.raw || r.name)).join('、')}）——到「对象」步骤选择真实对象后才能排程。</div></div>` : ''}
     <div class="review">
-      ${row('标题', `<input class="input" style="height:32px" id="cfTitle" value="${esc(CF.title || '')}" aria-label="标题">`, 1)}
+      ${row('标题', `<input class="input" style="height:28px;padding:0;border:0;background:transparent" id="cfTitle" value="${esc(CF.title || '')}" aria-label="标题">`, 1)}
       ${row('类型', `<span class="row" style="gap:6px">${typeIc(CF.type)}${esc(TYPE_LABEL[CF.type]||'')}</span>`, 0)}
       ${row('内容', `<div style="color:var(--text-2);white-space:pre-wrap;overflow-wrap:anywhere">${esc(CF.content || '—')}</div>`, 1)}
       ${row('对象', esc(CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') || (CF.type === 'agent_task' ? '默认执行器（Memory Service）' : '待确认')), 2)}
-      ${row('时间', `<div>${esc(spec ? specText({ scheduleSpec: spec }) : '待确认')}</div><div class="mono" style="color:var(--primary);font-size:12px;margin-top:2px">${n ? `下次 ${fmtNextText(n, tz)} · ${relText(n)}` : '—'} · ${tzLabel(tz)}</div>`, 3)}
+      ${row('时间', `<div>${esc(spec ? specText({ scheduleSpec: spec }) : '待确认')}</div><div class="mono" style="color:var(--primary);font-size:12px;margin-top:2px">${n ? `下次 ${fmtWall(n, tz)} · ${relText(n)}` : '—'} · ${tzLabel(tz)}</div>`, 3)}
     </div>
     <div class="field" style="margin-top:24px"><span class="label">Tag <span class="muted" style="font-weight:400">· 可多选，任务只存一份</span></span>
       <div class="row wrap">${S.tags.map((g)=>`<button class="chip" aria-pressed="${CF.tags.includes(g.id)}" data-cftag="${g.id}"><span class="tag-dot" style="background:${g.color||'#cdf26b'}"></span>${esc(g.name)}</button>`).join('')||'<span class="muted">还没有 Tag</span>'}<button class="chip" data-newtag-cf>${ic('plus','sm')} 新 Tag</button></div></div>
@@ -820,43 +832,37 @@ function cfStep5() {
 }
 
 function pageSetup() {
-  const items = S.tasks.filter((t) => t.status === 'inactive' || (t.missing && t.missing.length));
-  const ready = items.filter((t) => !(t.missing || []).length).length;
-  // BUG-50: an actionable control per missing item — jumps straight to the
-  // place where the gap can be fixed in place
-  const fixAction = (m, task) => {
-    if (m.startsWith('connection:')) return '<button class="btn ghost sm" data-nav="connections">去连接</button>';
-    if (['chatId','deliver.chatId','template.recipients'].includes(m)) return `<button class="btn ghost sm" data-fixstep="${task.id}:3">去补全对象</button>`;
-    return `<button class="btn ghost sm" data-fixstep="${task.id}:2">去补全内容</button>`;
+  const items = S.tasks.filter((t) => t.status === 'inactive' || t.missing?.length);
+  const ready = items.filter((t) => !t.missing?.length);
+  const selected = S.setupSelection || (S.setupSelection = new Set());
+  for (const id of selected) if (!ready.some((t) => t.id === id)) selected.delete(id);
+  const fixAction = (m, task) => m.startsWith('connection:')
+    ? '<button class="btn sm" data-nav="connections">去连接</button>'
+    : `<button class="btn sm" data-fixstep="${task.id}:${['chatId','deliver.chatId','template.recipients'].includes(m)?3:2}">去补全${['chatId','deliver.chatId','template.recipients'].includes(m)?'对象':'内容'}</button>`;
+  const card = (t, i) => {
+    const miss = t.missing || [], done = miss.length === 0;
+    const open = S.setupOpen === t.id || (!S.setupOpen && i === 0);
+    return `<div class="setup-item ${done?'ready':''}" id="setup-${t.id}"><div class="setup-head">
+      ${done?`<button class="radio-dot" role="checkbox" aria-checked="${selected.has(t.id)}" aria-label="选择 ${esc(t.title)}" data-setupselect="${t.id}" style="border-radius:4px;${selected.has(t.id)?'background:var(--primary);border-color:var(--primary)':''}">${selected.has(t.id)?ic('check','sm'):''}</button>`:'<span style="width:16px"></span>'}
+      ${typeIc(t.type)}<button class="grow" style="text-align:left;min-width:0" data-setupopen="${t.id}" aria-expanded="${open}"><div style="font-weight:500">${esc(t.title)}</div><div class="muted" style="font-size:12px">${esc(TYPE_SHORT[t.type]||t.type)} · ${esc(specText(t))}</div></button>
+      <span class="pill ${done?'ok':'warn'}">${done?'可启用':miss.length+' 项待补全'}</span>${done?`<button class="btn primary sm" data-enable="${t.id}">启用</button>`:''}
+      <button class="btn ghost icon sm" data-setupopen="${t.id}" aria-label="${open?'收起':'展开'}">${ic(open?'chevronUp':'chevronDown','sm')}</button></div>
+      ${open?`<div class="setup-body">${done?'<div class="muted">配置已就绪，手动启用后才会排程。</div>':miss.map((m)=>`<div class="req-row"><span class="ck"></span><div>${esc(missingLabel(m))}<div class="muted" style="font-size:11px">执行前需补齐本人配置</div></div><div>${fixAction(m,t)}</div></div>`).join('')}</div>`:''}</div>`;
   };
-  const card = (t) => {
-    const miss = t.missing || []; const done = miss.length === 0;
-    return `<div class="content-box setup-card"><label class="check"><input type="checkbox" ${done?'checked disabled':''}><span>${typeIc(t.type)}<b>${esc(t.title)}</b><span class="pill ${done?'ok':'warn'}">${done?'可启用':miss.length+' 项待补全'}</span></span></label>
-      <div class="muted">${esc(specText(t))} · ${{web:'Web 创建',glip:'Glip',import:'分享导入',jira:'JIRA',local:'Web 创建'}[t.origin||'web']||'Web 创建'}</div>
-      ${done ? `<button class="btn primary sm" data-enable="${t.id}">启用</button>` : `<div class="setup-items">${miss.map((m)=>`<span class="chip">${esc(missingLabel(m))}</span>${fixAction(m, t)}`).join('')}</div>`}</div>`;
-  };
-  $('#view').innerHTML = `<div class="page-h"><h2>需要补全</h2><span class="muted">未绑定邮箱/扩展不算缺项——单设备模式可以使用全部功能；缺项只包括执行真正需要的连接。</span></div>
-    <div class="setup-progress"><span class="mono">${ready} / ${items.length} 已就绪</span><button class="btn primary sm" id="setupAll" ${ready?'':'disabled'}>启用所选</button></div>
-    ${items.map(card).join('') || '<div class="empty"><div class="e-t">全部就绪</div><button class="btn ghost" data-nav="tasks">返回任务</button></div>'}`;
+  $('#view').innerHTML = `<div class="view-inner"><div class="page-h"><div class="grow"><h2>需要补全</h2><p>分享导入和缺少配置的任务先停在这里，<b>不会被触发</b>。逐项补全后手动启用，可批量操作。</p></div></div>
+    ${items.length?`<div class="card setup-progress" style="display:flex;align-items:center;gap:16px;margin-bottom:24px;padding:16px 20px;position:sticky;top:0;z-index:3;backdrop-filter:blur(8px)"><div class="grow"><div style="font-weight:600">${ready.length} / ${items.length} 已就绪</div><div class="progress" style="margin-top:8px;max-width:360px"><i style="width:${ready.length/items.length*100}%"></i></div></div><button class="btn ghost sm" id="setupSelectAll" ${ready.length?'':'disabled'}>全选就绪项</button><button class="btn primary" id="setupAll" ${selected.size?'':'disabled'}>${ic('play','sm')} 启用所选（${selected.size}）</button></div>${items.map(card).join('')}`:'<div class="empty"><h3>全部就绪</h3><p>没有待补全的任务。</p><button class="btn" data-nav="tasks">回到全部任务</button></div>'}</div>`;
 }
 function pageConnections() {
-  // BUG-59: the dot shows the VERIFICATION state — saved≠verified; a failed
-  // save is visibly red, never silently green
-  const card = (title, stateKey, statusHtml, bodyHtml = '') => `<div class="content-box"><div class="row"><b>${title}</b><span class="dot ${stateKey}"></span><span class="spacer"></span></div>${statusHtml}${bodyHtml}</div>`;
-  $('#view').innerHTML = `<div class="page-h"><h2>连接与执行器</h2></div>` +
-    card('Schedule Service', 'ok', '<div class="muted">Runner 在线 · 单一调度器 · 幂等与租约</div>') +
-    card('RingCentral 个人授权', connStateOf('rc_user'), connStatus('rc_user'), connForm('rc_user')) +
-    card('Bot 凭据', S.bots.configured ? 'ok' : connStateOf('rc_bot'), S.bots.configured ? `<div class="muted">已配置 ${S.bots.bots.length} 个 Bot</div>` : connStatus('rc_bot'), connForm('rc_bot')) +
-    card('Memory Service', connStateOf('memory'), connStatus('memory'), connForm('memory')) +
-    card('Multica', connStateOf('multica'), `${connStatus('multica')}<div style="margin-top:6px">${connForm('multica')}</div>`) +
-    card('Timeline 数据源', S.timeline.some((p) => p.configured && !p.stale), `<div class="muted">${S.timeline.filter((p)=>p.configured).length}/${S.timeline.length} 个项目有数据</div>`,
-      // BUG-58: per-project status — current release, refresh time, tasks in use
-      `<div style="margin-top:8px">${S.timeline.map((p) => {
-        const inUse = countBy((t) => { const sp = taskSpec(t); return sp && sp.kind === 'timeline' && sp.project === p.id && t.status !== 'archived'; });
-        return `<div class="kv" style="padding:3px 0"><span>${esc(p.name)}</span><span class="muted" style="font-size:12px">${p.currentRelease ? esc(p.currentRelease) + ' · ' + fmtDT(p.fetchedAt) : '暂无数据'} · ${inUse} 个任务在用</span></div>`;
-      }).join('')}</div>
-      <div class="row" style="gap:6px;margin-top:8px"><button class="btn ghost sm" id="tlRefresh">全部刷新</button><span class="muted" id="tlNote"></span></div>`) +
-    card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc((S.user.name ? S.user.name + ' · ' : '') + S.user.email)}</div>`, tokenMgmtHtml());
+  const card = (title, icon, state, description, body, status) => `<div class="card connection-card"><div class="card-h"><span class="type-ic">${ic(icon)}</span><div class="grow"><div class="t">${title}</div><div class="d">${description}</div></div>${status || `<span class="pill ${state==='ok'?'ok':state==='err'?'err':'warn'}"><span class="dot"></span>${state==='ok'?'已连接（验证成功）':state==='err'?'验证失败':state==='unverified'?'已保存未验证':'未配置'}</span>`}</div>${body}</div>`;
+  const connection = (title, key, icon, desc) => card(title,icon,connStateOf(key),desc,`<p class="muted" style="font-size:13px;margin:0 0 12px">${connStateOf(key)==='err'?esc(getConnCache(key)?.verifyError||'授权验证失败，请重新配置'):desc}</p>${connForm(key)}`);
+  $('#view').innerHTML = `<div class="view-inner"><div class="page-h"><div class="grow"><h2>连接与执行器</h2><p>所有凭证只属于你，分享时不会被携带。帮我问 / 帮我做通过 Memory Service 执行；纯投递类由 Runner 直接投递。</p></div></div><div class="cards">` +
+    card('Schedule Service','server','ok','唯一时间源 · 持久化 Runner','<dl class="kv"><dt>幂等</dt><dd class="mono" style="font-size:12px">occurrence 唯一键 · 幂等键</dd><dt>调度</dt><dd>持久化任务与运行记录</dd></dl>','<span class="pill ok"><span class="dot"></span>服务已连接</span>') +
+    connection('RingCentral 个人授权','rc_user','asme','As me 发送身份') +
+    connection('Bot 凭据','rc_bot','bot','Bot 身份发送') +
+    connection('Memory Service','memory','layers','帮我问 / 帮我做的业务链路与执行器栈') +
+    connection('Multica','multica','agent','Autopilot webhook · 无 Dify 中转') +
+    `<div class="card" style="grid-column:1/-1"><div class="card-h"><span class="type-ic">${ic('calendar')}</span><div class="grow"><div class="t">Timeline 数据源</div><div class="d">Release Info 接口 · 服务端缓存</div></div><button class="btn sm" id="tlRefresh">${ic('refresh','sm')} 全部刷新</button><span id="tlNote" class="muted"></span></div><div class="list">${S.timeline.map((p)=>{const n=countBy((t)=>taskSpec(t)?.kind==='timeline'&&taskSpec(t).project===p.id&&t.status!=='archived');return `<div class="share-row timeline-project"><div><div style="font-weight:500">${esc(p.name)}</div><div class="muted mono" style="font-size:11px">${esc(p.currentRelease||'接口未返回版本信息')}</div></div><div><span class="pill ${p.configured?(p.stale?'warn':'ok'):'err'}"><span class="dot"></span>${p.configured?(p.stale?'已过期':'最新'):'无数据'}</span></div><div class="muted hide-m" style="font-size:12px">${p.fetchedAt?ageText(p.fetchedAt)+'前刷新':'—'}</div><div class="muted hide-m" style="font-size:12px">${n?n+' 个任务在用':'—'}</div><button class="btn ghost sm" data-projectrefresh="${esc(p.id)}" aria-label="刷新 ${esc(p.name)}">${ic('refresh','sm')}</button></div>`;}).join('')}</div><p class="muted" style="font-size:12px;margin:12px 0 0">缓存过期且刷新失败时不会按旧日期发送，任务会标记需要处理。</p></div>` +
+    `<div class="card" style="grid-column:1/-1"><div class="card-h"><span class="type-ic">${ic('user')}</span><div class="grow"><div class="t">账号与设备</div><div class="d">${S.user.isGuest?'单设备模式（绑定邮箱后可在其他设备找回）':esc((S.user.name||'')+' · '+S.user.email)}</div></div></div>${tokenMgmtHtml()}</div></div></div>`;
 }
 function getConnCache(k) { return (S.connStatus || {})[k] !== undefined ? S.connStatus[k] : null; }
 // BUG-59: "healthy" means VERIFIED, not merely saved
@@ -888,21 +894,8 @@ function tokenMgmtHtml() {
     <table class="mini-table" style="margin-top:8px"><thead><tr><th>标签</th><th>创建</th><th>使用</th><th></th></tr></thead><tbody id="tkRows"></tbody></table>`;
 }
 function pageShares() {
-  function shareRow(s) {
-    let h = '<div class="content-box"><div class="row"><span class="tdot" style="background:' + esc(s.color || '#cdf26b') + '"></span><b>#' + esc(s.sourceTagName) + '</b>';
-    h += '<span class="pill ' + (s.revoked ? '' : 'ok') + '">' + (s.revoked ? '已撤销' : '分享中') + '</span><span class="spacer"></span></div>';
-    h += '<div class="mono muted" style="margin:6px 0">/share/' + esc(s.token) + ' <button class="btn ghost sm" data-copy="' + s.token + '">复制链接</button></div>';
-    h += '<div class="muted">' + (s.revoked ? '撤销于 ' + fmtDT(s.revokedAt || 0) : '实时视图 · ' + (s.liveCount || 0) + ' 个任务 · ' + (s.importCount || 0) + ' 人导入过') + '</div>';
-    h += '<div class="row" style="margin-top:6px">';
-    h += s.revoked
-      ? '<button class="btn ghost sm" data-reshare="' + s.tagId + '">重新分享</button>'
-      : '<button class="btn ghost sm" data-openshare="' + s.token + '">以接收方视角打开</button> <button class="btn ghost sm" data-reshare="' + s.tagId + '">重新分享</button> <button class="btn danger ghost sm" data-revoke="' + s.token + '">撤销分享</button>';
-    h += '</div></div>';
-    return h;
-  }
-  const rows = S.shares.map(shareRow).join('');
-  const empty = '<div class="empty"><div class="e-t">还没有分享</div><div class="e-s">到左侧分组里选择一个 Tag，点击「分享整包」。</div></div>';
-  $('#view').innerHTML = '<div class="page-h"><h2>分享管理</h2><button class="btn primary sm" id="btnNewShare">分享一个 Tag</button></div>' + (rows || empty);
+  const rows = S.shares.map((s)=>`<div class="share-row"><div style="min-width:0"><div class="row" style="font-weight:500"><span class="tag-dot" style="background:${esc(s.color||'#888')}"></span>${esc(s.sourceTagName)}</div><div class="muted mono" style="font-size:11px;margin-top:2px;overflow-wrap:anywhere">${esc(s.token)}</div></div><div class="hide-m"><span class="pill ${s.revoked?'err':'ok live'}"><span class="dot"></span>${s.revoked?'已撤销':'分享中'}</span></div><div class="hide-m"><span class="mono">${s.importCount||0}</span> <span class="muted" style="font-size:12px">人导入过</span></div><div class="hide-m muted" style="font-size:12px">${s.revoked?'撤销于 '+fmtDT(s.revokedAt||0):'实时 · 当前 '+(s.liveCount||0)+' 个任务'}</div><div class="row">${s.revoked?`<button class="btn sm" data-reshare="${s.tagId}">重新分享</button>`:`<button class="btn sm" data-copy="${s.token}">${ic('link','sm')} 复制链接</button><button class="btn sm ghost danger" data-revoke="${s.token}">撤销</button>`}<button class="btn ghost icon sm" data-openshare="${s.token}" aria-label="以接收方视角打开">${ic('externalLink','sm')}</button></div></div>`).join('');
+  $('#view').innerHTML = `<div class="view-inner"><div class="page-h"><div class="grow"><h2>分享管理</h2><p>分享是<b>实时</b>的：打开链接的人看到分组当前的任务。导入后得到独立副本；不分享凭证、收件人、执行器实例和运行历史。</p></div><button class="btn primary" id="btnNewShare">${ic('share','sm')} 分享一个 Tag</button></div>${rows?'<div class="list">'+rows+'</div>':'<div class="empty"><h3>还没有分享</h3><p>到左侧分组里选择一个 Tag，点击「分享整包」。</p></div>'}</div>`;
 }
 async function loadChain(id, occurrenceKey) {
   const box = $('#chainBox'); if (!box) return;
@@ -991,14 +984,14 @@ function wire() {
   // BUG-50: nav buttons rendered inside the view (setup cards, empty states)
   // were dead clicks — the old binding only covered the sidebar
   $$('#view [data-nav]').forEach((a) => a.onclick = () => nav(a.dataset.nav));
-  $('#btnNew').onclick = () => newFlow(null);
+  $('#btnNew').onclick = () => { sideClose(); newFlow(null); };
   const b2 = $('#btnNew2'); if (b2) b2.onclick = () => newFlow(null);
   $$('#view [data-open], #view .task-row').forEach((el) => el.onclick = () => openDrawer(el.dataset.open));
   $$('#view [data-open], #view .task-row').forEach((el) => el.onkeydown = (e) => { if (e.key === 'Enter') openDrawer(el.dataset.open); });
   $$('#view [data-filter]').forEach((a) => a.onclick = () => { S.filterStatus = [a.dataset.filter]; S.sub = 'all'; render(); });
   // BUG-07: status/type filter menus
-  const fsBtn = $('[data-menu="fs"]'); if (fsBtn) fsBtn.onclick = (e) => { e.stopPropagation(); openMenu(fsBtn, ['active','paused','draft','inactive','needs_attention','completed'].map((st) => '<button class="m-item" data-fs="' + st + '">' + (STATUS_L[st] || st) + '</button>').join(''), (act, arg) => { if (act === 'fs') { const set = new Set(S.filterStatus); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterStatus = [...set]; render(); } }); };
-  const ftBtn = $('[data-menu="ft"]'); if (ftBtn) ftBtn.onclick = (e) => { e.stopPropagation(); openMenu(ftBtn, TYPE_ORDER.map((ty) => '<button class="m-item" data-ft="' + ty + '">' + TYPE_LABEL[ty].split(' ')[0] + '</button>').join(''), (act, arg) => { if (act === 'ft') { const set = new Set(S.filterType); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterType = [...set]; render(); } }); };
+  const fsBtn = $('[data-menu="fs"]'); if (fsBtn) fsBtn.onclick = (e) => { e.stopPropagation(); openMenu(fsBtn, ['active','paused','draft','inactive','needs_attention','pending_review','completed'].map((st) => '<button class="m-item" data-fs="' + st + '">' + (STATUS_L[st] || st) + '</button>').join(''), (act, arg) => { if (act === 'fs') { const set = new Set(S.filterStatus); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterStatus = [...set]; render(); } }); };
+  const ftBtn = $('[data-menu="ft"]'); if (ftBtn) ftBtn.onclick = (e) => { e.stopPropagation(); openMenu(ftBtn, TYPE_ORDER.map((ty) => '<button class="m-item" data-ft="' + ty + '">' + TYPE_SHORT[ty] + '</button>').join(''), (act, arg) => { if (act === 'ft') { const set = new Set(S.filterType); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterType = [...set]; render(); } }); };
   // BUG-08: removable filter chips
   $$('[data-rm-s]').forEach((c) => c.onclick = () => { S.filterStatus = S.filterStatus.filter((x) => x !== c.dataset.rmS); render(); });
   $$('[data-rm-t]').forEach((c) => c.onclick = () => { S.filterType = S.filterType.filter((x) => x !== c.dataset.rmT); render(); });
@@ -1274,8 +1267,10 @@ function wireCfPane() {
   $$('#cfPane [data-tfr]').forEach((i2) => i2.onchange = (e) => { CF.publish.template[+e.target.dataset.tfr].required = e.target.checked; });
   // 时间步骤（X2）
   wireTimeStep();
-  $$('#cfPane [data-fix]').forEach((b) => b.onclick = () => { CF.step = ({ 类型: 1, 内容: 2, 对象: 3, 规则: 4, 时区: 4 })[b.dataset.fix] || 5; renderModal(); });
-  $$('#cfPane [data-cftag]').forEach((c) => c.onchange = (e) => { const id = c.dataset.cftag; const set = new Set(CF.tags); e.target.checked ? set.add(id) : set.delete(id); CF.tags = [...set]; });
+  $$('#cfPane [data-fix]').forEach((b) => b.onclick = () => { CF.step = ({ 标题: 2, 类型: 1, 内容: 2, 对象: 3, 时间: 4, 规则: 4, 时区: 4 })[b.dataset.fix] || 5; renderModal(); });
+  // F2: the confirm-step Tag chips are <button aria-pressed> (baseline) —
+  // clicking toggles membership; the old onchange/checked binding never fired
+  $$('#cfPane [data-cftag]').forEach((c) => c.onclick = () => { const id = c.dataset.cftag; const set = new Set(CF.tags); set.has(id) ? set.delete(id) : set.add(id); CF.tags = [...set]; c.setAttribute('aria-pressed', set.has(id)); });
   $$('#cfPane [data-newtag-cf]').forEach((b) => b.onclick = () => newTagDlg(false));
   const trial = $('#trialMe');
   if (trial && CF.type === 'agent_task') doTrial();
@@ -1292,8 +1287,14 @@ function wireChips(inputId, boxId, pickerId, target) {
     // Free-text chips (Enter) are never gated on any of this.
     const canSearch = q.length >= 2 && connStateOf('rc_user') !== 'off';
     const results = canSearch ? await resolveDirectory(q) : [];
-    if (picker) picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="m-item" data-rec="${i}">${esc(r.name)} <span class="muted">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
-      + (results.length || !canSearch ? '' : '<div class="muted" style="padding:6px 10px">没有匹配的对象</div>');
+    if (picker) {
+      picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="opt" role="option" data-rec="${i}">${esc(r.name)} <span class="s">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
+        + (q && !results.length ? `<button class="opt" role="option" data-free-recipient><span>${esc(prettifyRecipientLabel(q))}</span><span class="s">按原文添加 · 非目录校验</span></button>` : '');
+      picker.hidden = !q;
+      input.setAttribute('aria-expanded', String(Boolean(q)));
+      const free = $('[data-free-recipient]', picker);
+      if (free) free.onclick = () => { const rec = freeTextRecipient(q); if (rec) { (target === 'publish.recipients' ? CF.publish.recipients : CF.recipients).push(rec); renderCfPane(); } };
+    }
     // BUG-05: no silent fallback — surface the no-match state, keep the input
     const nm = $('#recNoMatch'); if (nm) nm.style.display = (results.length || !canSearch) ? 'none' : '';
     if (picker) $$('#' + pickerId + ' [data-rec]').forEach((m) => m.onclick = () => {
@@ -1334,7 +1335,7 @@ function updateVarPreview() {
   const d = new Date(at * 1000);
   const fmt = (o) => new Intl.DateTimeFormat('zh-CN', { timeZone: tz, hour12: false, ...o }).format(d);
   const vars = { date: fmt({ year: 'numeric', month: '2-digit', day: '2-digit' }), time: fmt({ hour: '2-digit', minute: '2-digit' }), datetime: fmt({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), weekday: fmt({ weekday: 'long' }), title: CF.title || '' };
-  el.innerHTML = esc(String(CF.content || '（内容为空）').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] !== undefined ? vars[k] : m)) + ` <div style="margin-top:4px">· 按下一次运行 ${fmtDT(at, tz)}（${tzLabel(tz)}）替换</div>`;
+  el.innerHTML = esc(String(CF.content || '（内容为空）').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => vars[k] !== undefined ? vars[k] : m)); el.title = `按下一次运行 ${fmtDT(at, tz)}（${tzLabel(tz)}）替换`;
 }
 function wireTimeStep() {
   const seg = $('#freqSeg'); if (!seg) return;
@@ -1349,8 +1350,24 @@ function wireTimeStep() {
     CF.time.off = Math.max(-30, Math.min(30, cur + (b.dataset.off === '+' ? 1 : -1)));
     renderCfPane();
   });
-  const bind = (id, key, isNum) => { const el = $('#' + id); if (!el) return; el.onchange = () => { CF.time[key] = isNum ? Number(el.value || 0) : el.value; renderCfPane(); }; };
-  bind('fWhen', 'when'); bind('fTime', 'at'); bind('fRate', 'rate', true); bind('fDow', 'dow', true); bind('fDom', 'dom', true); bind('fTz', 'tz');
+  // F1: native time inputs fire change per keystroke segment — re-rendering
+  // on each keystroke steals focus and resets typed digits (0930 → 00:00).
+  // Updates now stay in-state without re-rendering; the preview card and the
+  // pane refresh happen on blur/step-change instead.
+  const bind = (id, key, isNum) => {
+    const el = $('#' + id); if (!el) return;
+    el.onchange = () => { CF.time[key] = isNum ? Number(el.value || 0) : el.value; id === 'fTz' ? renderCfPane() : previewNext(); };
+  };
+  bind('fWhen', 'when'); bind('fTime', 'at'); bind('fRate', 'rate', true); bind('fDom', 'dom', true); bind('fTz', 'tz');
+  const fd = $('#fDow'); if (fd) fd.remove(); // daychips replaces the weekly select
+  $$('#cfPane [data-day]').forEach((b) => b.onclick = () => { CF.time.dow = Number(b.dataset.day) % 7 || 7; renderCfPane(); });
+  const preview = $('#timePrevWrap'); if (preview) preview.onclick = async (e) => {
+    const b = e.target.closest('[data-tlrefresh]'); if (!b) return;
+    const key = b.dataset.tlrefresh; b.disabled = true; TL_BUSY = key;
+    const r = await api('/timeline/refresh', { method: 'POST', body: { project: key } });
+    TL_BUSY = null; await refresh(); renderCfPane();
+    toast(r.status === 200 ? '已刷新' : '刷新失败：' + (r.body?.error || r.status), { kind: r.status === 200 ? 'ok' : 'err' });
+  };
   const fp = $('#fProject'); if (fp) fp.onchange = () => { CF.time.project = fp.value; CF.time.milestone = ''; renderCfPane(); };
   const fm = $('#fMile'); if (fm) fm.onchange = () => { CF.time.milestone = fm.value; renderCfPane(); };
 }
@@ -1436,16 +1453,16 @@ async function nextCf() {
   CF.step += 1; renderModal();
 }
 async function saveTask(finalStatus) {
-  // BUG-41: single-flight — rapid double clicks must not create two tasks
-  if (CF.saving) return;
-  CF.saving = true;
-  try { return await saveTaskInner(finalStatus); } finally { CF.saving = false; }
+  const flow = CF;
+  if (!flow || flow.saving) return;
+  flow.saving = true;
+  try { return await saveTaskInner(finalStatus, flow); } finally { flow.saving = false; }
 }
-async function saveTaskInner(finalStatus) {
-  // BUG-03: preview, confirm and save share one rule (CF.time). An incomplete
+async function saveTaskInner(finalStatus, flow) {
+  // BUG-03: preview, confirm and save share one rule (flow.time). An incomplete
   // rule blocks the save — never a silent rate-1440 fallback.
   const spec = currentSpec();
-  if (!spec) { toast('时间规则还不完整——请到「时间」步骤选择频率并填好时刻', { kind: 'err' }); CF.step = 4; renderModal(); return; }
+  if (!spec) { toast('时间规则还不完整——请到「时间」步骤选择频率并填好时刻', { kind: 'err' }); flow.step = 4; renderModal(); return; }
   // BUG-05/41: the recipient gate is an EXECUTION gate — only 排程/启用 must
   // block; drafts are allowed to be incomplete (missing shows as 待补全)
   // the recipient gate is an EXECUTION gate: only an explicit 排程/启用
@@ -1454,40 +1471,40 @@ async function saveTaskInner(finalStatus) {
   // an active task turns it inactive; a draft stays a draft), and blocking
   // here would prevent users from saving recipient changes at all (BUG-42)
   const activates = finalStatus === 'active';
-  if (activates && ['asme','bot','ai_report'].includes(CF.type)) {
-    const bad = (CF.recipients || []).filter((r) => r.unresolved || !r.id);
-    if (!CF.recipients.length || bad.length) {
+  if (activates && ['asme','bot','ai_report'].includes(flow.type)) {
+    const bad = (flow.recipients || []).filter((r) => r.unresolved || !r.id);
+    if (!flow.recipients.length || bad.length) {
       toast('收件人还未解析（原文已保留）——请在对象步骤从目录中选择真实对象', { kind: 'err', stay: 8000 });
-      CF.step = 3; renderModal(); return;
+      flow.step = 3; renderModal(); return;
     }
   }
-  const config = { ...(CF.config || {}) };
-  if (['asme','bot','ai_report'].includes(CF.type)) {
-    const r = CF.recipients[0] || {};
+  const config = { ...(flow.config || {}) };
+  if (['asme','bot','ai_report'].includes(flow.type)) {
+    const r = flow.recipients[0] || {};
     // BUG-41/05: unresolved text is kept as a pending input for later
     // completion — it never masquerades as a deliverable chatId
     config.chatId = r.id || null;
     config.chatName = r.name || null; // BUG-33: keep the resolved display name
     if (!r.id && r.raw) config.pendingRecipient = r.raw; else delete config.pendingRecipient;
   }
-  if (CF.type === 'agent_task') { config.executor = CF.executor === 'bot' ? 'memory' : CF.executor; config.mode = CF.mode; config.sender = CF.identity; }
-  if (CF.type === 'ai_report') {
+  if (flow.type === 'agent_task') { config.executor = flow.executor === 'bot' ? 'memory' : flow.executor; config.mode = flow.mode; config.sender = flow.identity; }
+  if (flow.type === 'ai_report') {
     // E-197: persist the server's ai_report contract — source (JQL) + deliver
     // target AND sender identity. The old flow saved only a short-form chatId:
     // the server gated every report as 待补全（数据源/投递对象） and, with no
     // sender on record, defaulted to AsMe and demanded RingCentral 个人授权
     // even though the user picked a Bot identity in step 3.
-    const r = CF.recipients[0] || {};
-    config.source = { kind: 'jql', jql: String(CF.config?.jql || '').trim(), emptyPolicy: CF.config?.emptyPolicy === 'silent' ? 'silent' : 'send' };
-    config.deliver = { chatId: r.id || null, sender: CF.identity === 'bot' ? 'bot' : 'user' };
+    const r = flow.recipients[0] || {};
+    config.source = { kind: 'jql', jql: String(flow.config?.jql || '').trim(), emptyPolicy: flow.config?.emptyPolicy === 'silent' ? 'silent' : 'send' };
+    config.deliver = { chatId: r.id || null, sender: flow.identity === 'bot' ? 'bot' : 'user' };
   }
-  if (CF.type === 'outreach') config.template = { question: $('#cfContent')?.value || CF.content, goal: $('#cfGoal')?.value || '', maxFollowup: +($('#cfMax')?.value || 2), followupIntervalSeconds: +($('#cfGap')?.value || 7200), recipients: CF.recipients.map((r) => ({ targetType: 'user', targetRef: r.id })) };
-  const notify = { notifyMe: { mode: CF.notifyMode || 'every' }, publish: { enabled: CF.publish.enabled && (CF.publish.recipients || []).length > 0, recipients: CF.publish.recipients || [], identity: CF.identity === 'bot' ? 'bot' : 'user', source: CF.publish.source || 'template', template: CF.publish.template || [] } };
-  const body = { type: CF.type, title: CF.title || CF.oneLine.slice(0, 40) || '未命名任务', content: CF.content || CF.oneLine, scheduleSpec: spec, config, notify, tagIds: CF.tags, status: finalStatus };
+  if (flow.type === 'outreach') config.template = { question: $('#cfContent')?.value || flow.content, goal: $('#cfGoal')?.value || '', maxFollowup: +($('#cfMax')?.value || 2), followupIntervalSeconds: +($('#cfGap')?.value || 7200), recipients: flow.recipients.map((r) => ({ targetType: 'user', targetRef: r.id })) };
+  const notify = { notifyMe: { mode: flow.notifyMode || 'every' }, publish: { enabled: flow.publish.enabled && (flow.publish.recipients || []).length > 0, recipients: flow.publish.recipients || [], identity: flow.identity === 'bot' ? 'bot' : 'user', source: flow.publish.source || 'template', template: flow.publish.template || [] } };
+  const body = { type: flow.type, title: flow.title || flow.oneLine.slice(0, 40) || '未命名任务', content: flow.content || flow.oneLine, scheduleSpec: spec, config, notify, tagIds: flow.tags, status: finalStatus };
   // BUG-01/02: editing PATCHes the original; a fresh flow reuses the draft
   // id created by the trial run instead of POSTing a second task
   let r;
-  const target = CF.editing || CF.lastDraftId;
+  const target = flow.editing || flow.lastDraftId;
   if (target) {
     // BUG-06/41: explicit draft / explicit activate; a plain edit NEVER drifts
     // status (a draft missing its Memory connection stays a draft)
@@ -1499,26 +1516,29 @@ async function saveTaskInner(finalStatus) {
   } else {
     r = await api('/tasks', { method: 'POST', body: { ...body, idempotencyKey: 'cf-' + uuid() } });
   }
-  if (r.status === 200) { CF.lastDraftId = r.body.task.id; return r.body.task.id; }
+  if (r.status === 200) { flow.lastDraftId = r.body.task.id; return r.body.task.id; }
   toast('保存失败：' + ((r.body && r.body.error) || r.status), { kind: 'err' });
 }
 async function doTrial() {
+  const flow = CF; if (!flow) return;
   // the trial draft is reuse state (lastDraftId), NOT an editing session —
   // 保存并排程 after a trial must still show the completion page (BUG-20)
   const id = CF.editing || CF.lastDraftId;
-  if (!id) { const saved = await saveTask('draft'); if (!saved) return; }
+  if (!id) { const saved = await saveTask('draft'); if (!saved || CF !== flow) return; }
   const r = await api(`/tasks/${CF.editing || CF.lastDraftId}/trial`, { method: 'POST', body: '{}' });
-  const me = $('#trialMe'), grp = $('#trialGrp');
+  if (CF !== flow) return;
+  const me = $('#trialMe'), grp = $('#trialGrp'); if (!me || !grp) return;
   if (r.status === 200) {
     me.textContent = (typeof r.body.notifyPreview === 'string' ? r.body.notifyPreview : '运行通知预览（不发送）');
     grp.innerHTML = r.body.publishPreview ? `发布预览：${esc(JSON.stringify(r.body.publishPreview))}` : '发布未开启';
   } else { me.textContent = '试运行失败'; }
 }
 function closeCf(autoDraft) {
+  const flow = CF; if (!flow) return;
   if (autoDraft && !CF.editing && !CF.lastDraftId && CF.step < 5 && (CF.oneLine || CF.title || CF.content)) {
     saveTask('draft').then((id) => {
       if (!id) return; // BUG-41: keep the flow open on failure — nothing was saved
-      CF = null; renderModal(); toast('草稿已自动保存', { undo: async () => { await api('/tasks/' + id, { method: 'DELETE' }); location.reload(); } });
+      if (CF === flow) { CF = null; renderModal(); } toast('草稿已自动保存', { undo: async () => { await api('/tasks/' + id, { method: 'DELETE' }); location.reload(); } });
     });
     return;
   }
@@ -1550,6 +1570,9 @@ function wireSharePage() {
   $$('#modalLayer [data-act="closeSf"]').forEach((b) => b.onclick = () => { SF = null; renderModal(); });
 }
 function wireSetup() {
+  $$('#view [data-setupopen]').forEach((b) => b.onclick = () => { S.setupOpen = S.setupOpen === b.dataset.setupopen ? 'closed' : b.dataset.setupopen; render(); });
+  $$('#view [data-setupselect]').forEach((b) => b.onclick = () => { const set = S.setupSelection || (S.setupSelection = new Set()); set.has(b.dataset.setupselect) ? set.delete(b.dataset.setupselect) : set.add(b.dataset.setupselect); render(); });
+  const selectAll = $('#setupSelectAll'); if (selectAll) selectAll.onclick = () => { S.setupSelection = new Set(S.tasks.filter(t => t.status === 'inactive' && !t.missing?.length).map(t => t.id)); render(); };
   $$('#view [data-fixstep]').forEach((b) => b.onclick = async () => {
     // BUG-50: open the task editor straight at the step that owns the gap
     const [id, step] = b.dataset.fixstep.split(':');
@@ -1559,7 +1582,16 @@ function wireSetup() {
     CF.step = +step; renderModal();
   });
   $$('#view [data-enable]').forEach((b) => b.onclick = async () => { const r = await api(`/tasks/${b.dataset.enable}/status`, { method: 'POST', body: { status: 'active' } }); toast(r.status === 200 ? '已启用' : '无法启用：' + (r.body.error || ''), { kind: r.status === 200 ? 'ok' : 'err' }); location.reload(); });
-  const all = $('#setupAll'); if (all) all.onclick = () => toast('启用所选：按卡片的启用按钮逐个启用', { kind: 'info' });
+  const all = $('#setupAll'); if (all) all.onclick = async () => {
+    all.disabled = true; let enabled = 0, failed = 0;
+    for (const id of S.setupSelection || []) {
+      const r = await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'active' } });
+      r.status === 200 ? enabled++ : failed++;
+    }
+    S.setupSelection = new Set(); await refresh(); render();
+    toast(`已启用 ${enabled} 项${failed ? `，${failed} 项未通过启用检查` : ''}`, { kind: failed ? 'warn' : 'ok' });
+  };
+  $$('#view [data-projectrefresh]').forEach(b => b.onclick = async () => { b.disabled = true; const r = await api('/timeline/refresh', { method: 'POST', body: { project: b.dataset.projectrefresh } }); await refresh(); render(); toast(r.status === 200 && r.body.ok ? '已刷新' : '刷新失败：' + (r.body.error || r.status), { kind: r.status === 200 && r.body.ok ? 'ok' : 'err' }); });
   const tl = $('#tlRefresh'); if (tl) tl.onclick = async () => { tl.textContent = '刷新中…'; const r = await api('/timeline/refresh', { method: 'POST', body: '{}' }); $('#tlNote').textContent = r.body.ok ? '已刷新' : '失败'; await refresh(); render(); };
   $$('#view [data-cfg]').forEach((b) => b.onclick = () => openConnDlg(b.dataset.cfg, null));
   const tk = $('#tkNew'); if (tk) tk.onclick = async () => { const r = await api('/auth/tokens', { method: 'POST', body: { label: 'web 签发' } }); if (r.status === 200) { $('#tkOut').textContent = '新令牌：' + r.body.token + '（仅显示一次，请立即复制）'; loadTokens(); } };
@@ -1631,10 +1663,10 @@ function onKey(e) {
   // inert inside inputs / editable areas / IME composition so digits typed
   // into the time field are never swallowed
   if (CF && /^[1-5]$/.test(e.key)) {
-    if (inField || e.isComposing) return;
+    if ((inField && !(document.activeElement?.id === 'cfOne' && !document.activeElement.value)) || e.isComposing) return;
     if (!CF.done && CF.step === 1) {
       const ty = TYPE_ORDER[+e.key - 1];
-      if (ty) { CF.type = ty; CF.spec = null; CF.step = 2; renderModal(); }
+      if (ty) { e.preventDefault(); CF.type = ty; CF.spec = null; CF.step = 2; renderModal(); }
     }
     return;
   }
@@ -1660,11 +1692,12 @@ function wireCfFooter(){
   const host = $('#modalLayer');
   if (!host || host.dataset.footwired) return; host.dataset.footwired = 1;
   host.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-next],[data-prev],[data-savedraft],[data-finish],[data-act="cancelCf"]');
+    const t = e.target.closest('[data-next],[data-prev],[data-savedraft],[data-finish],[data-skiptoconfirm],[data-act="cancelCf"]');
     if (!t) return;
     if (t.dataset.act === 'cancelCf') return closeCf(true);
     if (t.hasAttribute('data-prev')) { CF.step = Math.max(1, CF.step - 1); return renderModal(); }
     if (t.hasAttribute('data-next')) return nextCf();
+    if (t.hasAttribute('data-skiptoconfirm')) { CF.step = 5; renderModal(); return; }
     if (t.hasAttribute('data-savedraft')) {
       // BUG-41: only close + toast after the save REALLY succeeded; on
       // failure the flow stays open with the content intact and the error
@@ -1676,9 +1709,9 @@ function wireCfFooter(){
     }
     if (t.hasAttribute('data-finish')) {
       // BUG-20: capture editing state before closeCf() nulls CF
-      const editing = CF.editing;
+      const flow = CF, editing = flow.editing;
       const id = await saveTask(editing ? 'keep' : 'active');
-      if (!id) return; // saveTask already explained why and moved the flow
+      if (!id || CF !== flow) return; // saveTask already explained why and moved the flow
       await refresh();
       const saved = S.tasks.find((x) => x.id === id) || {};
       if (editing) {
