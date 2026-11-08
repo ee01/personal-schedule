@@ -40,7 +40,7 @@ try{
   check(title+'-tag-remove-persist',[],(await api(`/tasks/${task.id}`)).body.tags);
   await dismiss();await page.reload();
  }
- await page.setViewportSize({width:1440,height:900});await start('F5');await page.locator('[data-step="1"]').click();const names=await page.locator('.typecard .t').allTextContents();check('F5-distinct-types',true,names[0]!==names[1]&&names[1].includes('Bot'));await dismiss();await page.reload();
+ await page.setViewportSize({width:1440,height:900});await start('F5');await page.locator('[data-step="1"]').click();const names=await page.locator('.typecard .t').allTextContents();check('F5-distinct-types',true,names[0]!==names[1]&&names[1].includes('Bot'));check('F5-baseline-full-names',['帮我发 · 以我身份','帮我发 · Bot 身份','AI 报告','帮我问 · 追问链','帮我做 · Agent 执行'],names);await dismiss();await page.reload();
  // Weekly daychips: Sunday remains 0 in the saved cron, not Monday/undefined.
  await start('星期验证');await page.locator('[data-fq="weekly"]').click();
  check('weekly-labels',['一','二','三','四','五','六','日'],await page.locator('[data-day]').allTextContents());
@@ -66,6 +66,31 @@ try{
  await page.locator(`[data-setupopen="${missing.id}"]`).first().click();check('R7-setup-expands',true,await page.locator(`#setup-${missing.id} .setup-body`).isVisible());
  await page.locator('#setupSelectAll').click();await page.locator('#setupAll').click();await page.waitForFunction(id=>!document.querySelector(`[data-enable="${id}"]`),ready.id);
  check('R7-batch-real-enable','active',(await api('/tasks/'+ready.id)).body.status);check('R7-missing-not-enabled',true,(await api('/tasks/'+missing.id)).body.status!=='active');
+ // Complete a genuinely missing task through the editor, then enable it only
+ // through the setup selection. No status seeding for this regression.
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:width===390?844:900});
+  const gap=(await api('/tasks','POST',{type:'agent_task',title:'续填链路-'+width+' <b>原文</b>',content:'',config:{executor:'memory',mode:'read'},status:'inactive',scheduleSpec:{kind:'cron',expr:'0 9 * * *',timezone:'UTC'}})).body.task;
+  check('R7-gap-'+width,true,gap.status==='inactive'&&gap.missing.includes('content'));
+  await page.goto(base+'/app#/setup');await page.reload();
+  const head=page.locator(`#setup-${gap.id} button.grow[data-setupopen]`);if(await head.getAttribute('aria-expanded')!=='true')await head.click();
+  await page.locator(`#setup-${gap.id} [data-fixstep]`).first().click();await page.locator('#cfContent').fill('补齐后等待明确启用');await page.locator('[data-skiptoconfirm]').click();await page.waitForTimeout(350);
+  check('review-order-'+width,['类型','标题'],await page.locator('.review .rrow > .k').allTextContents().then(x=>x.slice(0,2)));
+  check('review-title-height-'+width,32,await page.locator('.review #cfTitle').evaluate(e=>e.getBoundingClientRect().height));
+  check('review-title-border-'+width,true,await page.locator('.review #cfTitle').evaluate(e=>getComputedStyle(e).borderTopWidth!=='0px'&&getComputedStyle(e).backgroundColor!=='rgba(0, 0, 0, 0)'));
+  await page.locator('[data-finish]').click();await page.locator('#modalLayer .modal').waitFor({state:'hidden'});await page.keyboard.press('Escape');
+  const filled=(await api('/tasks/'+gap.id)).body;check('R7-ready-status-'+width,'inactive',filled.status);check('R7-ready-no-missing-'+width,[],filled.missing);check('R7-ready-not-scheduled-'+width,null,filled.next_run_at);
+  await page.goto(base+'/app#/setup');await page.reload();await page.locator(`#setup-${gap.id} [data-setupselect]`).click();check('R7-ready-select-'+width,'true',await page.locator(`#setup-${gap.id} [data-setupselect]`).getAttribute('aria-checked'));
+  await page.locator('#setupAll').click();await page.waitForFunction(id=>!document.querySelector(`#setup-${id}`),gap.id);check('R7-ready-enabled-'+width,'active',(await api('/tasks/'+gap.id)).body.status);
+  await page.goto(base+'/app#/tasks');await page.reload();await page.locator(`[data-open="${gap.id}"]`).click();
+  check('drawer-full-meta-'+width,true,(await page.locator('.drawer-h').innerText()).includes('帮我做 · Agent 执行')&&(await page.locator('.drawer-h').innerText()).includes('Web · rev'));
+  check('drawer-actions-'+width,true,await page.locator('.drawer-f').evaluate(e=>{const edit=e.querySelector('[data-op="edit"]'),copy=e.querySelector('[data-op="copy"]'),sp=e.querySelector('.spacer');return !edit.classList.contains('ghost')&&getComputedStyle(sp).flexGrow==='1'&&(innerWidth<600?sp.getBoundingClientRect().width===0:sp.getBoundingClientRect().width>0)&&copy.getBoundingClientRect().x>edit.getBoundingClientRect().right;}));
+  await page.locator('[data-op="delete"]').click();check('delete-title-'+width,`删除「${gap.title}」？`,await page.locator('#modalLayer h3').innerText());check('delete-title-escaped-'+width,0,await page.locator('#modalLayer h3 b').count());await page.keyboard.press('Escape');await page.keyboard.press('Escape');
+ }
+ await page.setViewportSize({width:1440,height:900});await page.goto(base+'/app#/tasks');await page.reload();
+ check('stats-baseline-subtitles',true,(await page.locator('.stats').innerText()).includes('失败 / 待核实 / 待审核')&&(await page.locator('.stats').innerText()).includes('导入或缺配置，未启用'));
+ await page.locator('[data-filter="needs_attention,pending_review"]').click();check('stats-attention-filter',['needs_attention','pending_review'],await page.evaluate(()=>S.filterStatus));await page.goto(base+'/app#/tasks');await page.reload();
+ check('stats-interval-count',10079,await page.evaluate(()=>{const old=Date.now;try{Date.now=()=>2000000000000;return upcomingCount([{scheduleSpec:{kind:'rate',intervalMinutes:1},next_run_at:2000000060}],7);}finally{Date.now=old;}}));
  await api('/tags/'+tag.id+'/share','POST',{});
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:width===390?844:900});

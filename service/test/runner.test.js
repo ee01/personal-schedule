@@ -270,6 +270,22 @@ test('PATCH without status keeps an active task active (plain edit never drifts 
   assert.equal(edited.status, 'active', 'editing must not pause/demote an active task');
 });
 
+test('completing an inactive task stays ready in setup until explicitly enabled', () => {
+  const ctx = fresh();
+  const { task } = insertTask(ctx, { config: {} });
+  assert.equal(task.status, 'inactive');
+  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at) VALUES (?,?,?,?)').run(
+    ctx.user.id, 'rc_user', JSON.stringify({ token: 'controlled', ownChatId: 'me' }), nowSec(),
+  );
+  const ready = ctx.store.updateTask(ctx.user.id, task.id, { config: { chatId: 'controlled-target' } });
+  assert.equal(ready.id, task.id);
+  assert.deepEqual(ready.missing, []);
+  assert.equal(ready.status, 'inactive', 'ready remains selectable in setup');
+  assert.equal(ready.next_run_at, null, 'editing never schedules it');
+  const enabled = ctx.store.updateTask(ctx.user.id, task.id, { status: 'active' });
+  assert.equal(enabled.status, 'active');
+});
+
 
 // BUG-06 (round 5): a plain PATCH edit of an incomplete DRAFT keeps it a draft
 test('plain PATCH edit keeps an incomplete draft a draft (帮我做 without Memory)', () => {

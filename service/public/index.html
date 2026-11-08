@@ -246,6 +246,7 @@ button.stat:hover{background:var(--surface)}
 .drawer-h h2{margin:0;font-size:var(--fs-xl);line-height:1.25;font-weight:600;letter-spacing:-.02em}
 .drawer-b{flex:1;min-height:0;padding:0 24px 24px}
 .drawer-f{display:flex;gap:8px;padding:16px 24px;border-top:1px solid var(--line)}
+.drawer-f .spacer{flex:1}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 -24px 24px;padding:0 24px;position:sticky;top:0;background:var(--surface);z-index:2}
 .tabs button{height:40px;padding:0 8px;font-size:var(--fs-sm);color:var(--text-3);position:relative}
 .tabs button[aria-selected="true"]{color:var(--text)}
@@ -672,7 +673,7 @@ const ICONS = {
 const $ = (s, el=document) => el.querySelector(s);
 const $$ = (s, el=document) => [...el.querySelectorAll(s)];
 const esc = (s) => { const d = document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; };
-const TYPE_LABEL = { asme:'帮我发 · 以我身份', bot:'帮我发 · Bot 身份', ai_report:'AI 报告', outreach:'帮我问', agent_task:'帮我做', jira_automation:'JIRA 托管' };
+const TYPE_LABEL = { asme:'帮我发 · 以我身份', bot:'帮我发 · Bot 身份', ai_report:'AI 报告', outreach:'帮我问 · 追问链', agent_task:'帮我做 · Agent 执行', jira_automation:'JIRA 托管' };
 // F5: short display names — asme and bot must differ outside the demo copy
 const TYPE_SHORT = { asme:'帮我发（以我身份）', bot:'帮我发（Bot）', ai_report:'AI 报告', outreach:'帮我问', agent_task:'帮我做', jira_automation:'JIRA 托管' };
 const TYPE_ORDER = ['asme','bot','ai_report','outreach','agent_task'];

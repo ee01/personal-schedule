@@ -242,10 +242,10 @@ function pageTasks() {
   const soonest = actives.filter((t) => t.next_run_at).sort((a, b) => a.next_run_at - b.next_run_at)[0];
   const stats = isAll ? `
     <div class="stats">
-      <div class="stat next"><div class="k">${ic('clock','sm')} 下一次运行</div><div class="v stat-countdown" data-at="${soonest ? soonest.next_run_at : ''}">${soonest ? fmtNextText(soonest.next_run_at, soonest.timezone) : '—'}</div><div class="s">${soonest ? esc(soonest.title) : '暂无已排程任务'}</div></div>
-      <button class="stat" data-filter="active"><div class="k"><span class="dot" style="color:var(--ok);width:6px;height:6px"></span> 已排程</div><div class="v">${actives.length}</div><div class="s">查看</div></button>
-      <button class="stat" data-filter="needs_attention"><div class="k"><span class="dot" style="color:var(--err);width:6px;height:6px"></span> 需要处理</div><div class="v" style="color:${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')?'var(--err)':''}">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s">查看</div></button>
-      <button class="stat" data-nav="setup"><div class="k"><span class="dot" style="color:var(--warn);width:6px;height:6px"></span> 待补全</div><div class="v" style="color:${countBy((t)=>t.status==='inactive')?'var(--warn)':''}">${countBy((t)=>t.status==='inactive')}</div><div class="s">去补全</div></button>
+      <div class="stat next"><div class="k">${ic('clock','sm')} 下一次运行</div><div class="v stat-countdown" data-at="${soonest ? soonest.next_run_at : ''}">${soonest ? fmtNextText(soonest.next_run_at, soonest.timezone) : '—'}</div><div class="s">${soonest ? esc(soonest.title)+' · '+fmtWall(soonest.next_run_at, soonest.timezone) : '暂无已排程任务'}</div></div>
+      <button class="stat" data-filter="active"><div class="k"><span class="dot" style="color:var(--ok);width:6px;height:6px"></span> 已排程</div><div class="v">${actives.length}</div><div class="s">未来 7 天共 ${upcomingCount(actives, 7)} 次运行</div></button>
+      <button class="stat" data-filter="needs_attention,pending_review"><div class="k"><span class="dot" style="color:var(--err);width:6px;height:6px"></span> 需要处理</div><div class="v" style="color:${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')?'var(--err)':''}">${countBy((t)=>t.status==='needs_attention'||t.status==='pending_review')}</div><div class="s">失败 / 待核实 / 待审核</div></button>
+      <button class="stat" data-nav="setup"><div class="k"><span class="dot" style="color:var(--warn);width:6px;height:6px"></span> 待补全</div><div class="v" style="color:${countBy((t)=>t.status==='inactive')?'var(--warn)':''}">${countBy((t)=>t.status==='inactive')}</div><div class="s">导入或缺配置，未启用</div></button>
     </div>` : '';
   const chips = [...S.filterStatus.map((s2)=>`<button class="chip" aria-pressed="true" data-rm-s="${s2}">${STATUS_L[s2]} ${ic('x','sm')}</button>`), ...S.filterType.map((t)=>`<button class="chip" aria-pressed="true" data-rm-t="${t}">${(TYPE_SHORT[t]||'')} ${ic('x','sm')}</button>`)];
   const toolbar = `
@@ -306,6 +306,21 @@ function nextRunsOf(t, n = 3) {
     return out;
   }
   return [];
+}
+function upcomingCount(tasks, days) {
+  const now = Math.floor(Date.now() / 1000), end = now + days * 86400;
+  return tasks.reduce((total, t) => {
+    const spec = taskSpec(t);
+    if (spec?.kind === 'rate') {
+      const interval = spec.intervalMinutes * 60;
+      const first = t.next_run_at || (t.last_run_at || now) + interval;
+      return total + (interval > 0 && first < end ? Math.max(0, Math.ceil((end - Math.max(first, now)) / interval)) : 0);
+    }
+    // The create form's cron rules fire at most once per day. The same
+    // timezone-aware preview computes their upcoming times, without a fixed
+    // 20-occurrence cap incorrectly truncating interval tasks.
+    return total + nextRunsOf(t, days + 1).filter(at => at > now && at < end).length;
+  }, 0);
 }
 function weekHTML(list) {
   const days = [];
@@ -387,7 +402,7 @@ function drawerHTML() {
   <div class="drawer-h">
     ${typeIc(t.type, true)}
     <div class="grow">
-      <div class="row" style="gap:8px;margin-bottom:6px">${statusPill(t.status)}<span class="muted" style="font-size:12px">${esc(TYPE_LABEL[t.type]||t.type)}</span><span class="src">${{web:'Web 创建',glip:'Glip',import:'分享导入',jira:'JIRA',local:'Web 创建'}[t.origin||'web']} · rev ${t.revision||1}</span></div>
+      <div class="row" style="gap:8px;margin-bottom:6px">${statusPill(t.status)}<span class="muted" style="font-size:12px">${esc(TYPE_LABEL[t.type]||t.type)}</span><span class="src">${{web:'Web',glip:'Glip',import:'分享导入',jira:'JIRA',local:'Web'}[t.origin||'web']} · rev ${t.revision||1}</span></div>
       <h2 id="drawerTitle">${esc(t.title)}</h2>
     </div>
     <button class="btn ghost icon" data-act="closeDrawer" aria-label="关闭">${ic('x')}</button>
@@ -432,12 +447,12 @@ function drawerHTML() {
   <div class="drawer-f">
     ${archived
       ? `<span class="muted">已归档 · 保留任务身份与执行记录</span><span class="spacer"></span><button class="btn primary" data-op="restore">恢复（暂停状态）</button><button class="btn danger ghost" data-op="purge">彻底删除</button>`
-      : `${canPause?`<button class="btn ghost" data-op="pause">暂停 <kbd>P</kbd></button>`:''}
+      : `${canPause?`<button class="btn" data-op="pause">${ic('pause','sm')} 暂停 <kbd>P</kbd></button>`:''}
         ${canEnable?`<button class="btn primary" data-op="enable">${t.status==='draft'?'检查并排程':'启用'} <kbd>P</kbd></button>`:''}
+        <button class="btn" data-op="edit">${ic('edit','sm')} 编辑 <kbd>E</kbd></button>
         <span class="spacer"></span>
-        <button class="btn ghost" data-op="edit">编辑 <kbd>E</kbd></button>
-        <button class="btn ghost" data-op="copy">复制</button>
-        <button class="btn danger ghost" data-op="delete">删除</button>`}
+        <button class="btn ghost" data-op="copy">${ic('copy','sm')} 复制</button>
+        <button class="btn danger ghost" data-op="delete">${ic('trash','sm')} 删除</button>`}
   </div>`;
 }
 let TL_BUSY = null;
@@ -554,7 +569,7 @@ function cfStep1() {
     <div class="typegrid" role="radiogroup" aria-label="任务类型">
       ${TYPE_ORDER.map((k, i) => { const bad = (k === 'outreach' || k === 'agent_task') && connStateOf('memory') !== 'ok';
         return `<button class="typecard" role="radio" style="--c:var(--t-${k==='ai_report'?'report':(k==='agent_task'?'agent':(k==='jira_automation'?'report':k))})" aria-pressed="${CF.type===k}" data-pick="${k}">
-        <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_SHORT[k])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
+        <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_LABEL[k])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
         <div class="req">${bad?ic('alert','sm')+' 未连接 Memory：可创建，保存为未启用':ic('check','sm')}</div></button>`; }).join('')}
     </div>`;
 }
@@ -819,8 +834,8 @@ function cfStep5() {
     ${CF.highlights && CF.highlights.length ? `<div class="nl-recog">${ic('sparkle','sm')} 已从一句话识别：${CF.highlights.map((h) => `<span class="pill lime">${esc(h.label)}</span>`).join('')}</div>` : ''}
     ${unres.length ? `<div class="alert warn">${ic('alert')}<div>有未解析的收件人（原文已保留：${unres.map((r) => esc(r.raw || r.name)).join('、')}）——到「对象」步骤选择真实对象后才能排程。</div></div>` : ''}
     <div class="review">
-      ${row('标题', `<input class="input" style="height:28px;padding:0;border:0;background:transparent" id="cfTitle" value="${esc(CF.title || '')}" aria-label="标题">`, 1)}
       ${row('类型', `<span class="row" style="gap:6px">${typeIc(CF.type)}${esc(TYPE_LABEL[CF.type]||'')}</span>`, 0)}
+      ${row('标题', `<input class="input" style="height:32px" id="cfTitle" value="${esc(CF.title || '')}" aria-label="标题">`, 1)}
       ${row('内容', `<div style="color:var(--text-2);white-space:pre-wrap;overflow-wrap:anywhere">${esc(CF.content || '—')}</div>`, 1)}
       ${row('对象', esc(CF.recipients.map((r) => r.name || r.raw || '（名称未知）').join('、') || (CF.type === 'agent_task' ? '默认执行器（Memory Service）' : '待确认')), 2)}
       ${row('时间', `<div>${esc(spec ? specText({ scheduleSpec: spec }) : '待确认')}</div><div class="mono" style="color:var(--primary);font-size:12px;margin-top:2px">${n ? `下次 ${fmtWall(n, tz)} · ${relText(n)}` : '—'} · ${tzLabel(tz)}</div>`, 3)}
@@ -990,7 +1005,7 @@ function wire() {
   const b2 = $('#btnNew2'); if (b2) b2.onclick = () => newFlow(null);
   $$('#view [data-open], #view .task-row').forEach((el) => el.onclick = () => openDrawer(el.dataset.open));
   $$('#view [data-open], #view .task-row').forEach((el) => el.onkeydown = (e) => { if (e.key === 'Enter') openDrawer(el.dataset.open); });
-  $$('#view [data-filter]').forEach((a) => a.onclick = () => { S.filterStatus = [a.dataset.filter]; S.sub = 'all'; render(); });
+  $$('#view [data-filter]').forEach((a) => a.onclick = () => { S.filterStatus = a.dataset.filter.split(','); S.sub = 'all'; render(); });
   // BUG-07: status/type filter menus
   const fsBtn = $('[data-menu="fs"]'); if (fsBtn) fsBtn.onclick = (e) => { e.stopPropagation(); openMenu(fsBtn, ['active','paused','draft','inactive','needs_attention','pending_review','completed'].map((st) => '<button class="m-item" data-fs="' + st + '">' + (STATUS_L[st] || st) + '</button>').join(''), (act, arg) => { if (act === 'fs') { const set = new Set(S.filterStatus); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterStatus = [...set]; render(); } }); };
   const ftBtn = $('[data-menu="ft"]'); if (ftBtn) ftBtn.onclick = (e) => { e.stopPropagation(); openMenu(ftBtn, TYPE_ORDER.map((ty) => '<button class="m-item" data-ft="' + ty + '">' + TYPE_SHORT[ty] + '</button>').join(''), (act, arg) => { if (act === 'ft') { const set = new Set(S.filterType); set.has(arg) ? set.delete(arg) : set.add(arg); S.filterType = [...set]; render(); } }); };
@@ -1092,7 +1107,7 @@ async function drawerAction(id, op) {
       tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     CF.step = 5; renderModal(); return;
   }
-  if (op === 'delete') return confirmDlg({ title: '删除计划任务', body: '删除后进入归档（保留任务身份与执行记录），可随时从归档恢复。确定吗？', ok: '删除', danger: true,
+  if (op === 'delete') return confirmDlg({ title: `删除「${esc(DETAIL.task.title)}」？`, body: '删除后进入归档（保留任务身份与执行记录），可随时从归档恢复。确定吗？', ok: '删除', danger: true,
     // BUG-46: delete archives; undo restores the SAME identity + runs
     onOk: async () => {
       const r = await api(`/tasks/${id}`, { method: 'DELETE' });

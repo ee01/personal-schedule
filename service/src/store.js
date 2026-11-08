@@ -221,9 +221,10 @@ export function createTaskStore(db, getConnection) {
       // execute, so the setup gap must not demote the user's choice);
       // executable statuses fall back to inactive as before
       status = task.status === 'draft' ? 'draft' : 'inactive';
-    } else if (status === 'inactive') {
-      status = 'paused'; // completed config, but requires explicit enable
     }
+    // Completing setup keeps an inactive task in the setup view as ready to
+    // enable. Only an explicit activation leaves that queue; never schedule
+    // or silently convert it to a paused task merely because fields are filled.
     db.prepare(
       `UPDATE tasks SET title=?, content=?, schedule_spec=?, config=?, notify=?, timezone=?,
         status=?, revision=?, missing=?, updated_at=? WHERE id=?`,

@@ -196,7 +196,8 @@ test('jira-import state machine: disabled copy → completed unlocks activation'
   });
   assert.equal(completed.config.jiraImportState, 'completed');
   assert.deepEqual(completed.missing, []);
-  assert.equal(completed.status, 'paused'); // config complete, explicit enable required
+  assert.equal(completed.status, 'inactive'); // ready in setup; explicit enable still required
+  assert.equal(completed.next_run_at, null); // completing import never schedules it
   const enabled = ctx.store.setStatus(ctx.receiver.id, draftId, 'active');
   assert.equal(enabled.status, 'active');
 });
