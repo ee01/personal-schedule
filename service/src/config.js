@@ -73,8 +73,12 @@ export const config = {
   // without this flag, production must refuse email login ("邮件服务未配置")
   // — never generate usable codes into logs.
   authDevFallback: process.env.SCHEDULE_AUTH_DEV_FALLBACK === '1',
-  // extension auto-login bridge stays disabled until trusted HTTPS is live
-  // (coordinator boundary); enable explicitly with SCHEDULE_AUTH_LOGIN_BRIDGE=1.
+  // extension auto-login bridge (single-use, session-bound nonce; the PAT
+  // stays in the extension and never enters page JS). Off by default; enable
+  // with SCHEDULE_AUTH_LOGIN_BRIDGE=1. Enabled on this HTTP deployment by
+  // the owner's explicit decision (E-194): the PAT already travels over HTTP
+  // on every extension API call, so the bridge adds no new credential
+  // exposure — it adds one more PAT-authenticated call with the same surface.
   authLoginBridgeEnabled: process.env.SCHEDULE_AUTH_LOGIN_BRIDGE === '1',
   authBridgeNonceTtlSec: intEnv('SCHEDULE_AUTH_BRIDGE_NONCE_TTL_SEC', 120),
   // HTTP client
