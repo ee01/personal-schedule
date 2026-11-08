@@ -90,7 +90,8 @@ function renderCrumb() {
   $('#menuToggle').style.display = '';
   const mt = $('#menuToggle');
   if (mt && !mt.innerHTML.trim()) mt.innerHTML = ic('menu');
-  if (mt) mt.onclick = () => { $('#sidebar').classList.toggle('open'); document.body.classList.toggle('side-open'); };
+  ensureSideScrim();
+  if (mt) mt.onclick = () => { if ($('#sidebar').classList.contains('open')) sideClose(); else sideOpen(); };
 }
 
 function countBy(f) { return S.tasks.filter(f).length; }
@@ -99,12 +100,12 @@ function renderSidebar() {
   const sharing = S.shares.filter((s) => !s.revoked).length;
   const idRow = S.user.isGuest
     ? `<button class="guest-pill" data-menu="id-menu" aria-haspopup="menu">单设备模式 ▾</button>`
-    : `<button class="guest-pill" data-menu="id-menu" aria-haspopup="menu">${esc(S.user.email)} ▾</button>`;
+    : `<button class="guest-pill acct" data-menu="id-menu" aria-haspopup="menu" title="已登录：${esc(S.user.email)}">${esc(S.user.name || S.user.email)} ▾</button>`;
   const typeMode = S.sub.startsWith('type:') || S.groupMode === 'type';
   const tagPart = !typeMode && S.sub.startsWith('tag:') ? S.sub.slice(4) : null;
   const typePart = S.sub.startsWith('type:') ? S.sub.slice(5) : null;
   $('#sidebar').innerHTML = `
-  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div></div>
+  <div class="brand"><span class="brand-mark" data-icon="clock"></span><div><div class="brand-name">Personal Schedule</div><div class="brand-sub">${idRow}</div></div><button class="btn ghost icon side-close" id="sideClose" aria-label="关闭导航">${ic('close')}</button></div>
   <button class="new-btn" id="btnNew" data-act="create">${ic('plus')} 新建计划任务 <kbd>N</kbd></button>
   <nav class="side-scroll scroll">
     <button class="nav-item" data-nav="tasks" aria-current="${S.view==='tasks'&&S.sub!=='archived'?'true':'false'}">${ic('list','sm')} 全部任务<span class="count">${countBy(()=>true)}</span></button>
@@ -855,7 +856,7 @@ function pageConnections() {
         return `<div class="kv" style="padding:3px 0"><span>${esc(p.name)}</span><span class="muted" style="font-size:12px">${p.currentRelease ? esc(p.currentRelease) + ' · ' + fmtDT(p.fetchedAt) : '暂无数据'} · ${inUse} 个任务在用</span></div>`;
       }).join('')}</div>
       <div class="row" style="gap:6px;margin-top:8px"><button class="btn ghost sm" id="tlRefresh">全部刷新</button><span class="muted" id="tlNote"></span></div>`) +
-    card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc(S.user.email)}</div>`, tokenMgmtHtml());
+    card('账号', true, `<div class="muted">${S.user.isGuest ? '单设备模式（绑定邮箱后可在其他设备找回）' : esc((S.user.name ? S.user.name + ' · ' : '') + S.user.email)}</div>`, tokenMgmtHtml());
 }
 function getConnCache(k) { return (S.connStatus || {})[k] !== undefined ? S.connStatus[k] : null; }
 // BUG-59: "healthy" means VERIFIED, not merely saved

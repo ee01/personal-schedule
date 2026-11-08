@@ -128,10 +128,14 @@ try {
   // cookie-less revisit → fresh single-device session → seamless bridge login
   await page.context().clearCookies();
   await page.goto(base + '/');
-  const guestOk = await page.evaluate(async () => {
-    const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-    return r.status === 200 && (await r.json()).isGuest === true;
-  });
+  let guestOk = false;
+  for (let i = 0; i < 20 && !guestOk; i += 1) {
+    guestOk = await page.evaluate(async () => {
+      const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+      return r.status === 200 && (await r.json()).isGuest === true;
+    }).catch(() => false);
+    if (!guestOk) await sleep(250);
+  }
   ok(guestOk, 'cookie-less revisit boots a single-device session');
   // the extension's passive exchange: register + exchange (PAT from the
   // extension side, page cookie jar attached) → session becomes the account
@@ -145,6 +149,11 @@ try {
   ok(ex.status === 200 && ex.body?.user?.email === 'bridge.probe@ringcentral.com', 'seamless bridge login exchanges the single-device session into the account');
   const meFinal = await page.evaluate(async () => (await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })).json());
   ok(meFinal.email === 'bridge.probe@ringcentral.com' && meFinal.isGuest === false, 'session is the real account after the seamless login');
+  // E-194: the identity pill must show the logged-in account name (not 单设备模式)
+  await page.goto(base + '/');
+  await page.waitForTimeout(900);
+  const pill = await page.locator('.brand-sub [data-menu="id-menu"]').innerText().catch(() => '');
+  ok(pill.includes('probe') && !pill.includes('单设备模式'), 'identity pill shows the logged-in account name after auto-login');
 
   await browser.close();
 } finally {
