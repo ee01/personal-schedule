@@ -14,14 +14,21 @@ import {
 import { createTaskStore, CREATABLE_TYPES } from './store.js';
 import { nextRunAt } from './time.js';
 import {
-  providers, rcWhoAmI, rcDirectorySearch, rcBotsList, isTrustedRcOrigin,
+  providers, attachScheduleRuntime, rcWhoAmI, rcDirectorySearch, rcBotsList, isTrustedRcOrigin,
   globalRcDirectoryConnection, pickDirectoryConnection,
 } from './providers.js';
 import { publishReasonText } from './notify.js';
+import { createOutreachLocal } from './outreachLocal.js';
+import { createWorkerJobs } from './workerJobs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export function registerRoutes(app, { db, auth, shares, runner, timeline, notify, getConnections }) {
+export function registerRoutes(app, services) {
+  const { db, auth, shares, runner, timeline, notify, getConnections } = services;
+  let { outreachLocal, workerJobs } = services;
+  if (!outreachLocal) outreachLocal = createOutreachLocal(db, { rcPostMessage: providers.rcPostMessage });
+  if (!workerJobs) workerJobs = createWorkerJobs(db);
+  attachScheduleRuntime({ outreachLocal, workerJobs });
   const store = createTaskStore(db, (userId, key) => getConnections(userId, key));
 
   const json = (value) => JSON.stringify(value);
@@ -533,33 +540,34 @@ function describeRole(type, cfg) {
     const task = store.decodeTask(store.getUserTask(user.id, req.params.id));
     const connections = getConnections(user.id);
     if (task.type === 'outreach') {
-      const memory = connections.memory;
-      if (!memory) return { available: false, reason: 'memory connection not configured' };
-      const base = String(memory.baseUrl).replace(/\/+$/, '');
-      const templateId = task.config.memoryTemplateId || task.id;
-      // E-184 follow-up chain contract: includeHistory=1 for per-occurrence
-      // state/rounds/history; exact occurrenceKey passthrough when a run is
-      // selected (E-184 222dfe13)
-      // passthrough: includeHistory, occurrenceKey, limit, offset (Sol's
-      // controlled-verification defect 1: pagination was dropped)
-      const q = new URLSearchParams({ templateId });
-      for (const k of ['includeHistory', 'occurrenceKey', 'limit', 'offset', 'eventLimit', 'eventOffset']) {
-        const v = req.query[k];
-        if (v !== undefined && v !== '') q.set(k, String(v));
-        if (k === 'includeHistory' && v !== '1') q.delete('includeHistory');
+      if (!outreachLocal) return { available: false, reason: 'outreach runtime unavailable' };
+      if (task.config?.memoryTemplateId) {
+        return { available: false, reason: 'Memory 路径已移除，请改用 As me 后重新启用' };
       }
-      if (!q.get('limit')) q.set('limit', '20');
-      const response = await fetch(`${base}/api/v1/outreach/sessions?${q}`, {
-        headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
-        signal: AbortSignal.timeout(config.httpTimeoutMs),
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const sessions = outreachLocal.listSessions({
+        userId: user.id,
+        taskId: task.id,
+        occurrenceKey: req.query.occurrenceKey,
+        limit,
+        offset,
       });
-      if (!response.ok) return { available: false, reason: `memory responded ${response.status}` };
-      return { available: true, source: 'memory:outreach', sessions: await response.json() };
+      return { available: true, source: 'schedule:outreach', sessions };
     }
     if (task.type === 'agent_task') {
+      const executor = task.config.executor || 'worker';
+      if (executor === 'worker') {
+        const rows = db.prepare('SELECT id, status, occ_key, created_at, updated_at, result FROM worker_jobs WHERE task_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 20')
+          .all(task.id, user.id);
+        return { available: true, source: 'schedule:worker', items: rows };
+      }
+      if (executor === 'multica') {
+        return { available: false, reason: 'multica runs are tracked on the multica side (run link in evidence)' };
+      }
       const memory = connections.memory;
-      if (task.config.executor === 'multica' || !memory) {
-        return { available: false, reason: task.config.executor === 'multica' ? 'multica runs are tracked on the multica side (run link in evidence)' : 'memory connection not configured' };
+      if (!memory) {
+        return { available: false, reason: 'memory 执行器已退役，请改为 worker 或 multica' };
       }
       const base = String(memory.baseUrl).replace(/\/+$/, '');
       const response = await fetch(`${base}/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(task.id)}`, {
@@ -576,64 +584,45 @@ function describeRole(type, cfg) {
     const user = requireUser(db, auth, req);
     const task = store.decodeTask(store.getUserTask(user.id, req.params.id));
     const { action, sessionId } = req.body;
-    const memory = getConnections(user.id).memory;
-    if (!memory) throw badRequest('memory connection not configured');
-    const base = String(memory.baseUrl).replace(/\/+$/, ''); // was undeclared (500 root cause)
-    // ownership check: the session must belong to THIS task's template before
-    // any action is forwarded (E-184 contract)
-    if (sessionId) {
-      const base0 = String(memory.baseUrl).replace(/\/+$/, '');
-      const tpl = task.config.memoryTemplateId || task.id;
-      let owned = false;
-      try {
-        const check = await fetch(`${base0}/api/v1/outreach/sessions?templateId=${encodeURIComponent(tpl)}&limit=50&includeHistory=1`, {
-          headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(config.httpTimeoutMs),
-        });
-        if (check.ok) {
-          const data = await check.json().catch(() => ({}));
-          const list = data.items || data.records || data.sessions || [];
-          owned = list.some((x) => x.id === sessionId);
-        }
-      } catch { owned = false; }
-      if (!owned) throw badRequest('会话不属于该任务，已拒绝转发');
-    }
-    const routes = {
-      cancel_session: `/api/v1/outreach/sessions/${sessionId}/cancel`,
-      continue_followup: `/api/v1/outreach/sessions/${sessionId}/continue-followup`,
-      retry_session: `/api/v1/outreach/sessions/${sessionId}/retry`,
-      increase_followup_limit: `/api/v1/outreach/sessions/${sessionId}/increase-followup-limit`,
-    };
     if (action === 'cancel_run') {
       return { supported: false, reason: 'in-flight run cancellation is pending executor-side verification (3.5 取消)；已提交的 Multica run 需到 Multica 侧处理' };
     }
-    const route = routes[action];
-    if (!route) throw badRequest(`unknown action: ${action}`);
-    // increase_followup_limit (E-184 68425cfc): forward {requestId,
-    // expectedMaxFollowup}; the requestId is generated per click and reused
-    // across retries of THIS click, never rotated on a 409 — the user must
-    // refresh and explicitly click again.
-    let forwardBody = '{}';
-    if (action === 'increase_followup_limit') {
-      const { requestId, expectedMaxFollowup } = req.body || {};
-      if (!Number.isSafeInteger(expectedMaxFollowup) || expectedMaxFollowup < 0) {
-        throw badRequest('expectedMaxFollowup must be a non-negative integer');
+    if (task.type === 'outreach') {
+      if (!outreachLocal) throw badRequest('outreach runtime unavailable');
+      try {
+        const out = await outreachLocal.applyAction({
+          userId: user.id,
+          taskId: task.id,
+          sessionId,
+          action,
+          body: req.body,
+        });
+        return { forwarded: true, status: 200, conflict: Boolean(out.conflict), body: out };
+      } catch (error) {
+        throw badRequest(error.message);
       }
-      if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(requestId || ''))) {
-        throw badRequest('invalid requestId (16-128 chars)');
-      }
-      forwardBody = JSON.stringify({ requestId, expectedMaxFollowup });
     }
-    const response = await fetch(`${base}${route}`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${memory.userKey}`, 'Content-Type': 'application/json' },
-      body: forwardBody,
-      signal: AbortSignal.timeout(config.httpTimeoutMs),
+    throw badRequest('chain action not supported for this task type');
+  });
+
+  app.post('/api/v1/worker/claim', (req) => {
+    const pat = bearerToken(req);
+    const patUser = pat ? auth.userByBearer(pat) : null;
+    if (!patUser) throw badRequest('invalid token');
+    const job = workerJobs.claim({
+      userId: patUser.id,
+      leaseSeconds: Number(req.body?.leaseSeconds) || 120,
+      workerLabel: String(req.body?.label || 'cli'),
     });
-    const payload = await response.text();
-    // surface 409 as an explicit conflict signal: the client refreshes and
-    // lets the user click again with a fresh requestId; never auto-retries
-    return { forwarded: response.ok, status: response.status, conflict: response.status === 409, body: parseJson(payload, payload.slice(0, 500)) };
+    return { job };
+  });
+
+  app.post('/api/v1/worker/report', (req) => {
+    const patUser = bearerToken(req) ? auth.userByBearer(bearerToken(req)) : null;
+    if (!patUser) throw badRequest('invalid token');
+    const jobId = String(req.body?.jobId || '');
+    if (!jobId) throw badRequest('jobId required');
+    return workerJobs.report({ userId: patUser.id, jobId, body: req.body || {} });
   });
 
   // share modal preview source (BUG-12): the tasks currently in a Tag as
@@ -959,7 +948,7 @@ function describeRole(type, cfg) {
     return {
       taskTypes: CREATABLE_TYPES,
       executors: [
-        { id: 'memory', label: 'memory-service 执行器栈（OpenClaw/ACP/worker）', requires: 'connection:memory' },
+        { id: 'worker', label: '本机 Worker CLI', requires: 'cli:device' },
         { id: 'multica', label: 'Multica Autopilot（webhook 直连）', requires: 'connection:multica' },
       ],
       providers: Object.keys(providers),

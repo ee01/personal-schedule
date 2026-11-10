@@ -11,6 +11,9 @@ import { registerRoutes } from './api.js';
 import { createRunner } from './runner.js';
 import { createTimeline } from './timeline.js';
 import * as providers from './providers.js';
+import { attachScheduleRuntime } from './providers.js';
+import { createOutreachLocal } from './outreachLocal.js';
+import { createWorkerJobs } from './workerJobs.js';
 import { createNotify } from './notify.js';
 import { createShares } from './shares.js';
 import { parseJson, nowSec } from './util.js';
@@ -69,12 +72,15 @@ export function buildServices(db) {
     }
   };
   const timeline = createTimeline(db, { notify, onTaskNeedsAttention });
-  const runner = createRunner(db, { getConnections, notify, onTaskNeedsAttention });
-  return { db, auth, notify, shares, timeline, runner, getConnections, onTaskNeedsAttention };
+  const outreachLocal = createOutreachLocal(db, { rcPostMessage: providers.rcPostMessage });
+  const workerJobs = createWorkerJobs(db);
+  const runner = createRunner(db, { getConnections, notify, onTaskNeedsAttention, outreachLocal, workerJobs });
+  return { db, auth, notify, shares, timeline, runner, getConnections, onTaskNeedsAttention, outreachLocal, workerJobs };
 }
 
 export function buildApp(db) {
   const services = buildServices(db);
+  attachScheduleRuntime({ outreachLocal: services.outreachLocal, workerJobs: services.workerJobs });
   const app = createApp();
   registerRoutes(app, services);
   const webDir = path.join(here, '..', 'public');

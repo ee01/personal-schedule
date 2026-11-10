@@ -12,7 +12,7 @@ import { newId, nowSec, parseJson } from './util.js';
 import { nextRunAt, wallToInstant } from './time.js';
 import { providers } from './providers.js';
 
-export function createRunner(db, { getConnections, notify, onTaskNeedsAttention }) {
+export function createRunner(db, { getConnections, notify, onTaskNeedsAttention, outreachLocal, workerJobs }) {
   let timer = null;
   let running = false;
   const inFlight = new Set();
@@ -63,6 +63,7 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
       recoverStaleLeases();
       scheduleDueTasks();
       await dispatchPending();
+      if (outreachLocal) await outreachLocal.tickAdvance((userId) => getConnections(userId));
       await pollDispatchedAgentTasks();
       await finalizeSucceeded();
     } finally {
@@ -303,7 +304,7 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
     // exact-run polling: each occurrence carries its own memory action id
     const rows = db
       .prepare(
-        `SELECT o.*, t.title FROM occurrences o JOIN tasks t ON t.id = o.task_id
+        `SELECT o.*, t.title, t.config AS task_config FROM occurrences o JOIN tasks t ON t.id = o.task_id
          WHERE o.status = 'dispatched' AND t.type = 'agent_task' AND o.action_id IS NOT NULL
          LIMIT 50`,
       )
@@ -316,10 +317,24 @@ export function createRunner(db, { getConnections, notify, onTaskNeedsAttention 
     }
     for (const [userId, userRows] of byUser) {
       const memory = getConnections(userId).memory;
-      if (!memory) continue;
-      const base = String(memory.baseUrl).replace(/\/+$/, '');
+      const base = memory ? String(memory.baseUrl).replace(/\/+$/, '') : null;
       for (const row of userRows) {
+        const executor = parseJson(row.task_config, {}).executor || 'worker';
         try {
+          if (executor === 'worker' && workerJobs) {
+            const payload = workerJobs.pollResult(row.action_id);
+            if (!payload || payload.pending) continue;
+            const status = payload.status === 'succeeded' ? 'succeeded' : 'failed';
+            db.prepare(`UPDATE occurrences SET status = ?, finished_at = ?, result = ?, updated_at = ? WHERE id = ?`).run(
+              status,
+              now,
+              JSON.stringify(exactRunResult(row, { ...payload, runId: row.action_id })),
+              now,
+              row.id,
+            );
+            continue;
+          }
+          if (executor !== 'memory' || !base) continue;
           const response = await fetch(`${base}/api/v1/agent-tasks/runs/${encodeURIComponent(row.action_id)}/result`, {
             headers: { Authorization: `Bearer ${memory.userKey}`, Accept: 'application/json' },
             signal: AbortSignal.timeout(config.httpTimeoutMs),

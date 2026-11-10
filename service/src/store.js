@@ -85,7 +85,7 @@ export function createTaskStore(db, getConnection) {
         if (!con('rc_user')) missing.push('connection:rc_user');
       }
     } else if (type === 'outreach') {
-      if (!con('memory')) missing.push('connection:memory');
+      if (!con('rc_user')) missing.push('connection:rc_user');
       const template = config.template || {};
       if (!template.question) missing.push('template.question');
       if (!Array.isArray(template.recipients) || template.recipients.length === 0) {
@@ -94,9 +94,11 @@ export function createTaskStore(db, getConnection) {
     } else if (type === 'agent_task') {
       // the execution instruction is required: memory rejects empty task text
       if (!String(content || '').trim()) missing.push('content');
-      const executor = config.executor || 'memory';
+      const executor = config.executor || 'worker';
       if (executor === 'memory') {
-        if (!con('memory')) missing.push('connection:memory');
+        missing.push('executor');
+      } else if (executor === 'worker') {
+        // worker jobs queue locally — no extra connection card
       } else if (executor === 'multica') {
         const conn = con('multica');
         const webhookUrl = config.multica?.webhookUrl || conn?.webhookUrl;

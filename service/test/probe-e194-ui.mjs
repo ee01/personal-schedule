@@ -3,8 +3,15 @@
 // "在这台设备登录已有账号" entry (binding email / extension login let the
 // server decide the merge).
 import { createRequire } from 'node:module';
+import test from 'node:test';
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PW || 'playwright');
+let chromium;
+try {
+  ({ chromium } = require(process.env.PW || 'playwright'));
+} catch {
+  test.skip('playwright not installed — skip UI probe');
+  process.exit(0);
+}
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 

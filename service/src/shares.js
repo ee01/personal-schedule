@@ -40,7 +40,7 @@ export function createShares(db, { getConnections }) {
           : null,
       executorTypeHint:
         task.type === 'agent_task'
-          ? config.executor || 'memory'
+          ? config.executor || 'worker'
           : task.type === 'outreach'
             ? 'memory'
             : task.type === 'jira_automation'

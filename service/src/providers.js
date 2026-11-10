@@ -4,6 +4,11 @@
 import { config } from './config.js';
 import { HttpError } from './util.js';
 
+let scheduleRuntime = null;
+export function attachScheduleRuntime(ctx) {
+  scheduleRuntime = ctx;
+}
+
 async function httpJson(method, url, { headers = {}, body, timeoutMs } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || config.httpTimeoutMs);
@@ -140,13 +145,43 @@ function prettifiedRecipientLabel(raw) {
     .join(' ');
 }
 
-async function resolveFreeTextChat(connection, kind, chatId) {
+export function globalRcDirectoryConnection() {
+  if (!config.rcGlobalClientId || !config.rcGlobalClientSecret || !config.rcGlobalJwt) return null;
+  if (!isTrustedRcOrigin(config.rcGlobalServerUrl)) return null;
+  return {
+    serverUrl: config.rcGlobalServerUrl,
+    clientId: config.rcGlobalClientId,
+    clientSecret: config.rcGlobalClientSecret,
+    jwt: config.rcGlobalJwt,
+    kind: 'user',
+    _global: true,
+  };
+}
+
+// Directory lookup for recipient chips / dispatch resolution — personal
+// verified rc_user wins; otherwise deployment service JWT (read-only intent).
+export function pickDirectoryConnection(personalRcUser) {
+  if (personalRcUser && personalRcUser._verified === 1 && personalRcUser._trusted !== false) {
+    return personalRcUser;
+  }
+  return globalRcDirectoryConnection();
+}
+
+function directoryConnectionForDispatch(connection, kind, directoryConn) {
+  if (directoryConn) return directoryConn;
+  if (kind === 'bot') return globalRcDirectoryConnection();
+  return connection;
+}
+
+async function resolveFreeTextChat(connection, kind, chatId, directoryConn = null) {
   const raw = String(chatId || '').trim();
   if (!raw || /^\d+$/.test(raw)) return raw; // a real (numeric) chat id — post directly
+  const searchConn = directoryConnectionForDispatch(connection, kind, directoryConn);
+  if (!searchConn) return raw;
   for (const q of [raw, prettifiedRecipientLabel(raw)]) {
     if (!q) continue;
     try {
-      const { results } = await rcDirectorySearch({ ...connection, kind }, q);
+      const { results } = await rcDirectorySearch({ ...searchConn, kind: 'user' }, q, { includeChats: false });
       if (results && results.length) return results[0].id;
     } catch {
       // resolution is best-effort — fall through to the raw value
@@ -155,19 +190,37 @@ async function resolveFreeTextChat(connection, kind, chatId) {
   return raw;
 }
 
-export async function rcPostMessage(connection, kind, { chatId, text }) {
+export async function rcPostMessage(connection, kind, { chatId, text }, { directoryConn = null } = {}) {
   const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken({ ...connection, kind });
   const rawTarget = String(chatId || '').trim();
-  const target = await resolveFreeTextChat(connection, kind, chatId);
-  const response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: { chatId: target, text },
-  });
+  const dirConn = directoryConn ?? (kind === 'bot' ? globalRcDirectoryConnection() : null);
+  const target = await resolveFreeTextChat(connection, kind, chatId, dirConn);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+  let response;
+  const targetStr = String(target || '');
+  if (/^\d+$/.test(targetStr)) {
+    // E-197: legacy POST /glip/posts ignores JSON chatId; path form is canonical.
+    response = await httpJson('POST', `${server}/restapi/v1.0/glip/chats/${targetStr}/posts`, {
+      headers,
+      body: { text },
+    });
+  } else if (targetStr && targetStr !== rawTarget) {
+    // Resolved person/extension id via directory — DM uses personIds.
+    response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
+      headers,
+      body: { personIds: [targetStr], text },
+    });
+  } else {
+    response = await httpJson('POST', `${server}/restapi/v1.0/glip/posts`, {
+      headers,
+      body: { groupId: targetStr, text },
+    });
+  }
   if (!response.ok) {
     const detail = response.json?.message || response.text?.slice(0, 300) || '';
     // E-197 round 2: an unresolved free-text target surfaces cryptic AGW
@@ -208,40 +261,42 @@ function sha256HexSync(value) {
 // X1: recipient chips resolve against the real RC directory — a chip only
 // exists for a real match; unmatched input never fabricates a contact.
 
-export async function rcDirectorySearch(connection, query) {
+export async function rcDirectorySearch(connection, query, { includePersons = true, includeChats = true } = {}) {
   const server = rcServerUrl(connection); // trust-gated, redirects refused
   const token = await rcAccessToken(connection);
   const q = String(query || '').trim().toLowerCase();
-  if (!q) return [];
+  if (!q) return { tenant: 'default', results: [] };
   const me = await httpJson('GET', `${server}/restapi/v1.0/account/~/extension/~`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   if (!me.ok) throw new HttpError(502, `rc whoami failed (${me.status})`);
   const tenant = String(me.json?.account?.id || 'default');
   const results = [];
-  // persons: /directory/entries/search matches displayName/email
-  const persons = await httpJson(
-    'GET',
-    `${server}/restapi/v1.0/directory/entries/search?q=${encodeURIComponent(q)}&perPage=20`,
-    { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
-  );
-  for (const entry of persons.json?.records || []) {
-    results.push({
-      kind: 'user',
-      id: entry.id,
-      name: entry.displayName || entry.name || `${entry.firstName || ''} ${entry.lastName || ''}`.trim(),
-      email: Array.isArray(entry.emails) ? entry.emails[0] : undefined,
-      detail: entry.type === 'Department' ? '部门联系人' : undefined,
-    });
+  if (includePersons) {
+    const persons = await httpJson(
+      'GET',
+      `${server}/restapi/v1.0/directory/entries/search?q=${encodeURIComponent(q)}&perPage=20`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+    );
+    for (const entry of persons.json?.records || []) {
+      results.push({
+        kind: 'user',
+        id: entry.id,
+        name: entry.displayName || entry.name || `${entry.firstName || ''} ${entry.lastName || ''}`.trim(),
+        email: Array.isArray(entry.emails) ? entry.emails[0] : undefined,
+        detail: entry.type === 'Department' ? '部门联系人' : undefined,
+      });
+    }
   }
-  // group chats: list then filter by name server-side
-  const chats = await httpJson('GET', `${server}/restapi/v1.0/glip/chats?recordCount=100`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-  });
-  for (const chat of chats.json?.records || []) {
-    const name = chat.name || chat.firstName || '(未命名群组)';
-    if (String(name).toLowerCase().includes(q) || String(chat.id).includes(q)) {
-      results.push({ kind: 'chat', id: chat.id, name, detail: chat.type === 'Team' ? `团队群 · ${chat.memberCount || '?'} 人` : '群组' });
+  if (includeChats) {
+    const chats = await httpJson('GET', `${server}/restapi/v1.0/glip/chats?recordCount=100`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    for (const chat of chats.json?.records || []) {
+      const name = chat.name || chat.firstName || '(未命名群组)';
+      if (String(name).toLowerCase().includes(q) || String(chat.id).includes(q)) {
+        results.push({ kind: 'chat', id: chat.id, name, detail: chat.type === 'Team' ? `团队群 · ${chat.memberCount || '?'} 人` : '群组' });
+      }
     }
   }
   return { tenant, results };
@@ -356,35 +411,20 @@ export const providers = {
     },
   },
   outreach: {
-    idempotent: true, // memory templateId+occurrenceKey unique
+    idempotent: true,
     async run({ task, occurrence, connections }) {
-      const memory = connections.memory;
-      if (!memory) throw new HttpError(424, 'memory connection not configured');
-      const base = String(memory.baseUrl).replace(/\/+$/, '');
-      const templateId = task.config.memoryTemplateId || task.id;
-      const response = await httpJson(
-        'POST',
-        `${base}/api/v1/outreach/templates/${encodeURIComponent(templateId)}/trigger-occurrence`,
-        {
-          headers: {
-            Authorization: `Bearer ${memory.userKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: {
-            occurrenceKey: occurrence.occ_key,
-            scheduledFor: occurrence.scheduled_for,
-            sourceSystem: 'schedule_service',
-            template: task.config.template || null, // memory side upserts on demand
-          },
-        },
-      );
-      if (!response.ok) throw new HttpError(502, `memory trigger-occurrence failed (${response.status}): ${response.json?.error || ''}`);
-      const payload = response.json || {};
+      if (!scheduleRuntime?.outreachLocal) throw new HttpError(500, 'outreach runtime not initialized');
+      const payload = await scheduleRuntime.outreachLocal.triggerOccurrence({
+        userId: task.user_id,
+        task,
+        occurrence,
+        connections,
+      });
       return {
         status: 'succeeded',
         summaryForOwner: payload.created === false
           ? '触发命中已有会话（重复 occurrence，幂等跳过）'
-          : `已触发帮我问会话（template ${templateId}）`,
+          : '已创建帮我问会话并发送首问',
         evidence: { created: payload.created, sessionId: payload.session?.id || null },
       };
     },
@@ -392,7 +432,16 @@ export const providers = {
   agent_task: {
     idempotent: true, // memory idempotencyKey / multica Idempotency-Key
     async run({ task, occurrence, connections }) {
-      const executor = task.config.executor || 'memory';
+      const executor = task.config.executor || 'worker';
+      if (executor === 'worker') {
+        if (!scheduleRuntime?.workerJobs) throw new HttpError(500, 'worker runtime not initialized');
+        const jobId = scheduleRuntime.workerJobs.enqueue({ userId: task.user_id, task, occurrence });
+        return {
+          status: 'dispatched',
+          summaryForOwner: '帮我做任务已入队，等待本机 Schedule Worker 领取',
+          evidence: { accepted: true, actionId: jobId, workerJob: true },
+        };
+      }
       if (executor === 'memory') {
         const memory = connections.memory;
         if (!memory) throw new HttpError(424, 'memory connection not configured');

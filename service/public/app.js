@@ -134,7 +134,7 @@ function renderSidebar() {
   $('#tagList').innerHTML = list.join('');
   const cs = S.connStatus || {};
   const dots = [['ok','Runner'], [S.timeline.some(p=>p.configured)?'ok':'off','Timeline'],
-    [S.bots.configured?'ok':'off','Bot'], [connStateOf('memory'),'Memory Service'], [connStateOf('multica'),'Multica']];
+    [S.bots.configured?'ok':'off','Bot'], [connStateOf('multica'),'Multica']];
   $('#connDots').innerHTML = dots.map(([k,l])=>`<span class="dot ${k}" style="width:6px;height:6px" title="${l}"></span>`).join('');
   positionSeg($('#tagSeg'));
   const sn = $('#sideNewTag'); if (sn) sn.onclick = (e) => { e.stopPropagation(); newTagDlg(false); };
@@ -490,7 +490,7 @@ let CF = null; // create flow state
 function newFlow(type, prefill = {}) {
   CF = { step: 1, type: type || null, oneLine: prefill.oneLine || '', title: prefill.title || '', content: prefill.content || '',
     recipients: prefill.recipients || [], identity: prefill.identity || 'user', publish: prefill.publish || { enabled: false, source: 'template', template: [], recipients: [] },
-    mode: prefill.mode || 'read', executor: prefill.executor || 'memory', spec: prefill.spec || null, tags: prefill.tags || [], editing: prefill.id || null,
+    mode: prefill.mode || 'read', executor: prefill.executor || 'worker', spec: prefill.spec || null, tags: prefill.tags || [], editing: prefill.id || null,
     // E-197: step-2 extras (ai_report JQL / 空结果策略) persist in CF.config
     config: prefill.config || {},
     // BUG-03: the time config lives in persistent form state — preview,
@@ -574,7 +574,7 @@ function cfStep1() {
     <div class="nl-sug">${chips.map((c)=>`<button class="chip" data-demo="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     <div class="group-h" style="padding-top:0">或者选择类型 <span class="n">按 1–5</span></div>
     <div class="typegrid" role="radiogroup" aria-label="任务类型">
-      ${TYPE_ORDER.map((k, i) => { const bad = (k === 'outreach' || k === 'agent_task') && connStateOf('memory') !== 'ok';
+      ${TYPE_ORDER.map((k, i) => { const bad = false;
         return `<button class="typecard" role="radio" style="--c:var(--t-${k==='ai_report'?'report':(k==='agent_task'?'agent':(k==='jira_automation'?'report':k))})" aria-pressed="${CF.type===k}" data-pick="${k}">
         <kbd class="k">${i+1}</kbd>${typeIc(k, true)}<div><div class="t">${esc(TYPE_LABEL[k])}</div><div class="d">${esc(TYPE_DESC[k] || '')}</div></div>
         <div class="req">${bad?ic('alert','sm')+' 未连接 Memory：可创建，保存为未启用':ic('check','sm')}</div></button>`; }).join('')}
@@ -883,7 +883,7 @@ function pageConnections() {
     card('Schedule Service','server','ok','唯一时间源 · 持久化 Runner','<dl class="kv"><dt>幂等</dt><dd class="mono" style="font-size:12px">occurrence 唯一键 · 幂等键</dd><dt>调度</dt><dd>持久化任务与运行记录</dd></dl>','<span class="pill ok" title="Schedule Service 已连接"><span class="dot"></span>已连接</span>') +
     connection('RingCentral 个人授权','rc_user','asme','As me 发送身份') +
     connection('Bot 凭据','rc_bot','bot','Bot 身份发送') +
-    connection('Memory Service','memory','layers','帮我问 / 帮我做的业务链路与执行器栈') +
+    '<div class="card" style="grid-column:1/-1"><div class="card-h"><span class="type-ic">layers</span><div class="grow"><div class="t">本机 Worker CLI</div><div class="d">帮我做默认走 Worker 队列；在终端用设备 token 执行 <span class="mono">node src/cli.js worker claim</span>（详见部署文档）。</div></div></div></div>' +
     connection('Multica','multica','agent','Autopilot webhook · 无 Dify 中转') +
     `<div class="card" style="grid-column:1/-1"><div class="card-h"><span class="type-ic">${ic('calendar')}</span><div class="grow"><div class="t">Timeline 数据源</div><div class="d">Release Info 接口 · 服务端缓存</div></div><button class="btn sm" id="tlRefresh">${ic('refresh','sm')} 全部刷新</button><span id="tlNote" class="muted"></span></div><div class="list">${S.timeline.map((p)=>{const n=countBy((t)=>taskSpec(t)?.kind==='timeline'&&taskSpec(t).project===p.id&&t.status!=='archived');return `<div class="share-row timeline-project"><div><div style="font-weight:500">${esc(p.name)}</div><div class="muted mono" style="font-size:11px">${esc(p.currentRelease||'接口未返回版本信息')}</div></div><div><span class="pill ${p.configured?(p.stale?'warn':'ok'):'err'}"><span class="dot"></span>${p.configured?(p.stale?'已过期':'最新'):'无数据'}</span></div><div class="muted hide-m" style="font-size:12px">${p.fetchedAt?ageText(p.fetchedAt)+'前刷新':'—'}</div><div class="muted hide-m" style="font-size:12px">${n?n+' 个任务在用':'—'}</div><button class="btn ghost sm" data-projectrefresh="${esc(p.id)}" aria-label="刷新 ${esc(p.name)}">${ic('refresh','sm')}</button></div>`;}).join('')}</div><p class="muted" style="font-size:12px;margin:12px 0 0">缓存过期且刷新失败时不会按旧日期发送，任务会标记需要处理。</p></div>` +
     `<div class="card" style="grid-column:1/-1"><div class="card-h"><span class="type-ic">${ic('user')}</span><div class="grow"><div class="t">账号与设备</div><div class="d">${S.user.isGuest?'单设备模式（绑定邮箱后可在其他设备找回）':esc((S.user.name||'')+' · '+S.user.email)}</div></div></div>${tokenMgmtHtml()}</div></div></div>`;
@@ -895,7 +895,14 @@ async function loadConnStatus() {
   // BUG-59: presence is not health — keep the verification state:
   // 0 saved/unverified, 1 verified, -1 failed
   const r = await api('/connections'); const out = {};
-  for (const [k, v] of Object.entries(r.body || {})) out[k] = { saved: Boolean(v && (v.baseUrl || v.token || v.clientId || v.webhookUrl)), verified: v?.verified ?? 0, verifyError: v?.verifyError || null };
+  for (const [k, v] of Object.entries(r.body || {})) {
+    out[k] = {
+      saved: Boolean(v && (v.baseUrl || v.token || v.clientId || v.webhookUrl || v.globalDefault)),
+      verified: v?.verified ?? 0,
+      verifyError: v?.verifyError || null,
+      globalDefault: Boolean(v?.globalDefault),
+    };
+  }
   S.connStatus = out;
 }
 const connStateOf = (k) => {
@@ -1102,7 +1109,7 @@ async function drawerAction(id, op) {
     if (r.status !== 200) toast('无法启用：' + (r.body.error || '') + (r.body.missing || []).map((m) => missingLabel(m)).join('、'), { kind: 'err', stay: 8000 });
     else { await refresh(); render(); if (DETAIL && DETAIL.task.id === id) openDrawer(id); toast('已启用', { undo: async () => { await api(`/tasks/${id}/status`, { method: 'POST', body: { status: 'paused' } }); await refresh(); render(); } }); }
     return; }
-  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
+  if (op === 'edit') { const t = DETAIL.task; newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'worker', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     // BUG-21: editing starts at the content step — the type is already known
     CF.prevRevision = t.revision || 1; CF.step = 2; renderModal(); return; }
   if (op === 'copy') {
@@ -1309,7 +1316,7 @@ function wireChips(inputId, boxId, pickerId, target) {
     // on the rc_user (AsMe) identity — without the connection configured
     // there is nothing to ask, and suggestions start at 2+ characters.
     // Free-text chips (Enter) are never gated on any of this.
-    const canSearch = q.length >= 2 && connStateOf('rc_user') !== 'off';
+    const canSearch = q.length >= 2 && (connStateOf('rc_user') !== 'off' || connStateOf('rc_directory') === 'ok');
     const results = canSearch ? await resolveDirectory(q) : [];
     if (picker) {
       picker.innerHTML = results.slice(0, 8).map((r, i) => `<button class="opt ${i===0?'hl':''}" role="option" data-rec="${i}">${esc(r.name)} <span class="s">${esc(r.detail || (r.email || ''))}</span></button>`).join('')
@@ -1335,7 +1342,7 @@ function wireChips(inputId, boxId, pickerId, target) {
       async function await0() {
         // Enter always tries the directory first when the AsMe identity
         // exists (even a 1-char query), then falls back to free text
-        const res = connStateOf('rc_user') !== 'off' && q ? await resolveDirectory(q) : [];
+        const res = (connStateOf('rc_user') !== 'off' || connStateOf('rc_directory') === 'ok') && q ? await resolveDirectory(q) : [];
         if (res.length) arr.push(res[0]);
         else if (q) { const ft = freeTextRecipient(q); if (ft) arr.push(ft); } // E-196: free-text fallback
         if (res.length || q) { input.value = ''; renderCfPane(); }
@@ -1518,7 +1525,7 @@ async function saveTaskInner(finalStatus, flow) {
     config.chatName = r.name || null; // BUG-33: keep the resolved display name
     if (!r.id && r.raw) config.pendingRecipient = r.raw; else delete config.pendingRecipient;
   }
-  if (flow.type === 'agent_task') { config.executor = flow.executor === 'bot' ? 'memory' : flow.executor; config.mode = flow.mode; config.sender = flow.identity; }
+  if (flow.type === 'agent_task') { config.executor = flow.executor || 'worker'; config.mode = flow.mode; config.sender = flow.identity; }
   if (flow.type === 'ai_report') {
     // E-197: persist the server's ai_report contract — source (JQL) + deliver
     // target AND sender identity. The old flow saved only a short-form chatId:
@@ -1609,7 +1616,7 @@ function wireSetup() {
     const [id, step] = b.dataset.fixstep.split(':');
     await openDrawer(id);
     const t = DETAIL.task;
-    newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'memory', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
+    newFlow(t.type, { id: t.id, title: t.title, content: t.content, recipients: recipsFrom(t), identity: identityOf(t), mode: t.config?.mode || 'read', executor: t.config?.executor || 'worker', publish: t.notify?.publish || { enabled: false }, spec: taskSpec(t), tags: (t.tags || []).map((g) => g.id), config: reportCfgOf(t) });
     CF.step = +step; renderModal();
   });
   $$('#view [data-enable]').forEach((b) => b.onclick = async () => { const r = await api(`/tasks/${b.dataset.enable}/status`, { method: 'POST', body: { status: 'active' } }); toast(r.status === 200 ? '已启用' : '无法启用：' + (r.body.error || ''), { kind: r.status === 200 ? 'ok' : 'err' }); location.reload(); });

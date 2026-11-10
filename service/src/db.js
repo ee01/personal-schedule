@@ -252,6 +252,56 @@ ALTER TABLE connections ADD COLUMN verified_at INTEGER;
 ALTER TABLE connections ADD COLUMN verify_error TEXT;
 `,
   },
+  {
+    version: 10,
+    up: `
+CREATE TABLE outreach_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  occ_key TEXT NOT NULL,
+  state TEXT NOT NULL,
+  chat_id TEXT,
+  template_json TEXT NOT NULL,
+  followup_count INTEGER NOT NULL DEFAULT 0,
+  max_followup INTEGER NOT NULL DEFAULT 3,
+  wait_until INTEGER,
+  last_poll_at INTEGER,
+  last_post_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(task_id, occ_key)
+);
+CREATE INDEX idx_outreach_sessions_task ON outreach_sessions(user_id, task_id);
+CREATE TABLE outreach_events (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT,
+  created_at INTEGER NOT NULL
+);
+`,
+  },
+  {
+    version: 11,
+    up: `
+CREATE TABLE worker_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  occurrence_id TEXT NOT NULL UNIQUE,
+  occ_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at INTEGER,
+  payload TEXT NOT NULL,
+  result TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_worker_jobs_user_status ON worker_jobs(user_id, status);
+`,
+  },
 ];
 
 function migrate(db) {

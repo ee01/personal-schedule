@@ -1,6 +1,6 @@
 # Schedule 剥离 Memory、本机 Worker CLI、扩展职责重划
 
-状态：实施中（§8.3 第 1 步完成：登录桥路由与配置已删除；扩展删除 AUTO_BIND/WEB_LOGIN。第 2 步进行中：分享 cookie 导入、分享页邮箱登录）。来源：E-194 线程 2026-11-09 产品决定。取代 `docs/plan-b-execution-boundary-spec.md` 中「业务链路唯一归 memory-service」「帮我做默认走 memory 执行器栈」两条边界；时间源仍唯一归 Schedule Runner。
+状态：实施中（§8.3 第 1–2 步已部署；第 3 步切片：本地 outreach 会话 + rc_user；第 4 步切片：worker 队列 + CLI claim/report + 轮询收尾）。来源：E-194 线程 2026-11-09 产品决定。取代 `docs/plan-b-execution-boundary-spec.md` 中「业务链路唯一归 memory-service」「帮我做默认走 memory 执行器栈」两条边界；时间源仍唯一归 Schedule Runner。
 
 实现卡片（均 backlog，未开工）：Schedule 仓 [E-200](mention://issue/01a1c0c5-36d4-7c33-895e-e57b2f876f37)；Personal AI 仓 [E-201](mention://issue/01a1c0c5-382f-766d-9027-5f4d58787223)。本文是实现依据。Personal AI 侧操作清单见第 8 节。
 

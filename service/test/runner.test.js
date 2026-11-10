@@ -288,17 +288,17 @@ test('completing an inactive task stays ready in setup until explicitly enabled'
 
 
 // BUG-06 (round 5): a plain PATCH edit of an incomplete DRAFT keeps it a draft
-test('plain PATCH edit keeps an incomplete draft a draft (帮我做 without Memory)', () => {
+test('plain PATCH edit keeps an incomplete draft a draft (帮我做 worker, no extra connection)', () => {
   const ctx = fresh();
-  const { task } = insertTask(ctx, { type: 'agent_task', status: 'draft', config: { executor: 'memory', mode: 'read' } });
+  const { task } = insertTask(ctx, { type: 'agent_task', status: 'draft', config: { executor: 'worker', mode: 'read' } });
   assert.equal(task.status, 'draft');
   const edited = ctx.store.updateTask(ctx.user.id, task.id, {
-    title: 'edited draft', content: 'still here',
+    title: 'edited draft', content: '',
     scheduleSpec: { kind: 'cron', expr: '0 9 * * *', timezone: 'Asia/Shanghai' },
-    config: { executor: 'memory', mode: 'read' },
+    config: { executor: 'worker', mode: 'read' },
   });
-  assert.equal(edited.status, 'draft', 'missing Memory must not demote a draft to inactive');
-  assert.ok(edited.missing.includes('connection:memory'));
+  assert.equal(edited.status, 'draft', 'missing content must not demote a draft to inactive');
+  assert.ok(edited.missing.includes('content'));
 });
 
 
@@ -502,9 +502,7 @@ test('timeline task: schedulePreview sets next_run_at from the release cache; ru
   ctx.db.prepare('INSERT INTO timeline_cache (project, data, fetched_at, stale, last_error) VALUES (?,?,?,0,NULL)')
     .run('mThor', JSON.stringify([{ release: '26.4.20', milestones: [{ name: 'FF', date: ffDate }] }]), now);
 
-  // a VERIFIED memory connection first — the task must be executable on creation
-  ctx.db.prepare('INSERT INTO connections (user_id, key, value, updated_at, verified) VALUES (?,?,?,?,1)').run(
-    ctx.user.id, 'memory', JSON.stringify({ baseUrl: 'http://127.0.0.1:9/v', userKey: 'k' }), now);
+  // worker executor needs no extra connection card — task executable on creation
   // route through the real API surface: create → the route's schedulePreview
   const { registerRoutes } = await import('../src/api.js');
   const routes = [];
@@ -516,7 +514,7 @@ test('timeline task: schedulePreview sets next_run_at from the release cache; ru
     headers: authHeaders,
     body: { type: 'agent_task', title: 'tl fire probe', content: 'run', status: 'active',
       scheduleSpec: { kind: 'timeline', project: 'mThor', milestone: 'FF', offsetDays: 0, time: atHHMM, timezone: 'Asia/Shanghai' },
-      config: { executor: 'memory', mode: 'read' }, notify: {}, idempotencyKey: 'tl-fire-1' },
+      config: { executor: 'worker', mode: 'read' }, notify: {}, idempotencyKey: 'tl-fire-1' },
   });
   const taskId = created.task.id;
   const row = ctx.db.prepare('SELECT next_run_at, status FROM tasks WHERE id = ?').get(taskId);
@@ -526,7 +524,7 @@ test('timeline task: schedulePreview sets next_run_at from the release cache; ru
   // controlled clock: advance past the instant and let the runner fire.
   ctx.store.recomputeMissing(ctx.user.id, taskId);
   const active = ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
-  assert.equal(active.status, 'active', 'verified memory keeps the task executable');
+  assert.equal(active.status, 'active', 'worker executor keeps the task executable');
   const { providers } = await import('../src/providers.js');
   const original = providers.agent_task.run;
   let fired = 0;
@@ -558,24 +556,39 @@ test('PUT connection verifies server-side; a failed verification is recorded and
   const authHeaders = { authorization: `Bearer ${token}` };
   const put = routes.find(([p]) => p === '/api/v1/connections/{key}')[1];
 
-  // memory: health check against a dead port is deterministic — fails
-  const bad = await put({ headers: authHeaders, params: { key: 'memory' }, body: { value: { baseUrl: 'http://127.0.0.1:9/dead', userKey: 'k' } } });
+  // multica: webhook health check against a dead port is deterministic — fails
+  const bad = await put({
+    headers: authHeaders,
+    params: { key: 'multica' },
+    body: { value: { webhookUrl: 'http://127.0.0.1:9/not-a-webhook', bindingUuid: 'bind-1' } },
+  });
   assert.equal(bad.verification.state, 'failed', 'dead endpoint recorded as failed');
-  const badRow = ctx.db.prepare('SELECT verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'memory');
+  const badRow = ctx.db.prepare('SELECT verified, verify_error FROM connections WHERE user_id = ? AND key = ?').get(ctx.user.id, 'multica');
   assert.equal(badRow.verified, -1);
   assert.ok(badRow.verify_error, 'failure reason stored');
 
-  // a memory-executor task reads the failed connection as MISSING
-  const { task } = insertTask(ctx, { type: 'agent_task', status: 'draft', config: { executor: 'memory', mode: 'read' } });
+  const { task } = insertTask(ctx, {
+    type: 'agent_task', status: 'draft',
+    config: { executor: 'multica', mode: 'read' },
+  });
+  const good = await put({
+    headers: authHeaders,
+    params: { key: 'multica' },
+    body: { value: { webhookUrl: 'http://127.0.0.1:9/api/webhooks/autopilots/bind-1', bindingUuid: 'bind-1' } },
+  });
+  assert.equal(good.verification.state, 'ok');
   ctx.db.prepare('UPDATE connections SET verified = 1, verify_error = NULL WHERE user_id = ? AND key = ?').run(
-    ctx.user.id, 'memory');
+    ctx.user.id, 'multica');
   ctx.store.recomputeMissing(ctx.user.id, task.id);
   const okState = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
-  assert.ok(!okState.missing.includes('connection:memory'), 'verified connection satisfies the requirement');
-  // now save a FAILED memory connection — the same task must read as missing again
-  await put({ headers: authHeaders, params: { key: 'memory' }, body: { value: { baseUrl: 'http://127.0.0.1:9/dead2', userKey: 'k' } } });
+  assert.ok(!okState.missing.includes('multica.webhookUrl'), 'verified connection satisfies the requirement');
+  await put({
+    headers: authHeaders,
+    params: { key: 'multica' },
+    body: { value: { webhookUrl: 'http://127.0.0.1:9/bad-path', bindingUuid: 'bind-1' } },
+  });
   const failedState = ctx.db.prepare('SELECT status, missing FROM tasks WHERE id = ?').get(task.id);
-  assert.ok(failedState.missing.includes('connection:memory'), 'failed verification counts as missing — never silently executable');
+  assert.ok(failedState.missing.includes('multica.webhookUrl'), 'failed verification counts as missing — never silently executable');
   assert.equal(failedState.status, 'draft', 'draft stays a draft');
 });
 
