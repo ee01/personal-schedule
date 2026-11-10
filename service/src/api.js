@@ -9,11 +9,14 @@ import {
   requireUser, bearerToken,
 } from './auth.js';
 import {
-  badRequest, notFound, forbidden, parseJson, nowSec, newId, sha256Hex,
+  badRequest, notFound, forbidden, parseJson, nowSec, newId,
 } from './util.js';
 import { createTaskStore, CREATABLE_TYPES } from './store.js';
 import { nextRunAt } from './time.js';
-import { providers, rcWhoAmI, rcDirectorySearch, rcBotsList, isTrustedRcOrigin } from './providers.js';
+import {
+  providers, rcWhoAmI, rcDirectorySearch, rcBotsList, isTrustedRcOrigin,
+  globalRcDirectoryConnection, pickDirectoryConnection,
+} from './providers.js';
 import { publishReasonText } from './notify.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +42,7 @@ function describeRole(type, cfg) {
     version: '0.1.0',
     uptime: process.uptime(),
     runner: { inFlight: runner.inFlightSize() },
+    rcDirectoryGlobal: Boolean(config.rcGlobalJwt && config.rcGlobalClientId && config.rcGlobalClientSecret),
   }));
 
   app.get('/api/v1/extension/info', () => ({
@@ -81,7 +85,6 @@ function describeRole(type, cfg) {
     resendConfigured: Boolean(config.authResendApiKey),
     devFallback: config.authDevFallback && !config.authResendApiKey,
     emailLogin: true,
-    loginBridge: { enabled: config.authLoginBridgeEnabled, nonceTtlSec: config.authBridgeNonceTtlSec, channel: 'personal-schedule-extension-v1' },
   }));
 
   // session rotation: on every login the previously presented session (e.g.
@@ -97,91 +100,6 @@ function describeRole(type, cfg) {
   // email one-time code (Resend when configured; dev fallback logs server-side)
   app.post('/api/v1/auth/email/request', async (req) => {
     return auth.requestEmailCode(String(req.body?.email || ''));
-  });
-
-  // ------------------------------------------------ login bridge (E-184 contract)
-  // Converged single interface with the extension (both repos): the page
-  // registers a single-use nonce with its (guest) session, then posts
-  // {channel:'personal-schedule-extension-v1', type:'login-request', nonce}
-  // to its own origin; the extension verifies the page origin matches its
-  // configured Schedule service and calls the exchange below with the PAT.
-  // The server consumes the nonce exactly once (anti-replay), requires the
-  // PAT (only the extension holds it) and rotates the old session away.
-  // The PAT never enters page JS. Disabled until trusted HTTPS is live
-  // (SCHEDULE_AUTH_LOGIN_BRIDGE=1).
-  function bridgeOriginOk(req) {
-    // defense in depth on top of SameSite=Lax: when a browser sends an Origin
-    // header for these endpoints it must be this service's public origin.
-    // Exception: the Personal AI extension's background exchange sends its own
-    // chrome-extension:// origin (E-194 e2e finding — Chromium attaches it on
-    // credentialed cross-origin POSTs from extension service workers). The
-    // PAT in Authorization plus the session-bound single-use nonce remain the
-    // actual authenticators; an extension origin alone grants nothing.
-    const origin = req.headers.origin;
-    if (!origin) return true; // non-browser callers
-    if (origin.startsWith('chrome-extension://')) return true;
-    const base = publicBaseUrl();
-    if (base && origin === base) return true;
-    return origin === `http://127.0.0.1:${config.port}` || origin === `http://localhost:${config.port}`;
-  }
-
-  function currentSessionId(req) {
-    const cookies = req.headers.cookie || '';
-    const match = cookies.match(/ps_session=([^;]+)/);
-    return match ? sha256Hex(match[1]) : null;
-  }
-
-  app.post('/api/v1/auth/bridge/register', (req) => {
-    if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
-    if (!bridgeOriginOk(req)) throw badRequest('origin 不匹配');
-    const user = requireUser(db, auth, req);
-    const nonce = String(req.body?.nonce || '').trim();
-    if (!nonce || nonce.length < 16 || nonce.length > 128) throw badRequest('nonce required (16-128 chars)');
-    if (user.is_guest !== 1) throw badRequest('仅单设备模式会话需要扩展登录（已绑定账号无需此流程）');
-    const sessionId = currentSessionId(req);
-    if (!sessionId) throw badRequest('会话缺失');
-    db.prepare('DELETE FROM login_bridges WHERE expires_at < ?').run(nowSec());
-    // first registration wins: another session can never re-bind/overwrite an
-    // already-registered nonce
-    try {
-      db.prepare('INSERT INTO login_bridges (nonce, expires_at, session_id) VALUES (?,?,?)').run(
-        nonce, nowSec() + config.authBridgeNonceTtlSec, sessionId,
-      );
-    } catch {
-      throw badRequest('nonce 已被登记（归属其他会话）');
-    }
-    return { registered: true, ttlSec: config.authBridgeNonceTtlSec };
-  });
-
-  app.post('/api/v1/auth/bridge/exchange', async (req, res) => {
-    if (!config.authLoginBridgeEnabled) throw badRequest('登录桥未启用（受信 HTTPS 就绪前保持禁用）');
-    if (!bridgeOriginOk(req)) throw badRequest('origin 不匹配');
-    const nonce = String(req.body?.nonce || '').trim();
-    if (!nonce || nonce.length > 128) throw badRequest('nonce required');
-    const pat = bearerToken(req);
-    const patUser = pat ? auth.userByBearer(pat) : null;
-    if (!patUser) throw badRequest('invalid token');
-    // correlation: the exchange must come from the SAME browser session that
-    // registered the nonce (the extension's fetch shares the page cookie jar),
-    // and that session must be the guest that initiated the flow. Consumed
-    // atomically — no cross-session / cookieless consumption, no overwrite.
-    const sessionId = currentSessionId(req);
-    if (!sessionId) throw badRequest('缺少发起会话');
-    const binding = db
-      .prepare('SELECT session_id FROM login_bridges WHERE nonce = ? AND expires_at > ?')
-      .get(nonce, nowSec());
-    if (!binding) throw badRequest('nonce 无效或已使用');
-    const sessionUser = auth.userBySession((req.headers.cookie.match(/ps_session=([^;]+)/) || [])[1]);
-    if (!sessionUser || sessionUser.is_guest !== 1) {
-      throw badRequest('发起会话不是单设备会话（已绑定账号无需扩展登录）');
-    }
-    const consumed = db
-      .prepare('DELETE FROM login_bridges WHERE nonce = ? AND session_id = ? AND expires_at > ?')
-      .run(nonce, sessionId, nowSec());
-    if (consumed.changes === 0) throw badRequest('nonce 无效或已使用');
-    const merged = mergeGuestOnLogin(req, patUser.id);
-    rotateSession(req, res, patUser.id, auth.tokenIdByBearer(pat));
-    return { user: publicUser(patUser), ...merged };
   });
 
   app.post('/api/v1/auth/email/verify', async (req, res) => {
@@ -592,11 +510,18 @@ function describeRole(type, cfg) {
   });
 
   function decorateOccurrence(occurrence) {
+    // occurrence.error is a plain-text dispatch message — parseJson would
+    // discard it (JSON.parse fails) and the run drawer would show no reason.
+    let error = occurrence.error ?? null;
+    if (error != null) {
+      const parsed = parseJson(error, null);
+      error = parsed ?? error;
+    }
     return {
       ...occurrence,
       result: parseJson(occurrence.result, null),
       publishError: parseJson(occurrence.publish_error, null),
-      error: parseJson(occurrence.error, null),
+      error,
       note: occurrence.note,
       publishReason: occurrence.publish_status === 'publish_paused' ? publishReasonText(parseJson(occurrence.publish_error, {}).reason || '') : null,
     };
@@ -755,6 +680,18 @@ function describeRole(type, cfg) {
       out.jira = { ...maskSecrets('jira', { baseUrl: config.jiraGlobalBaseUrl, token: config.jiraGlobalToken }),
         globalDefault: true, updated_at: null, verified: 1, verifiedAt: null, verifyError: null };
     }
+    const globalDir = globalRcDirectoryConnection();
+    if (globalDir) {
+      out.rc_directory = {
+        ...maskSecrets('rc_user', { clientId: globalDir.clientId, serverUrl: globalDir.serverUrl }),
+        globalDefault: true,
+        saved: true,
+        updated_at: null,
+        verified: 1,
+        verifiedAt: null,
+        verifyError: null,
+      };
+    }
     return out;
   });
 
@@ -883,15 +820,41 @@ function describeRole(type, cfg) {
     const user = requireUser(db, auth, req);
     const q = String(req.query.q || '').trim().toLowerCase();
     if (!q) return { results: [], tenant: null, cached: false };
-    const conn = getConnections(user.id, 'rc_user');
-    if (!conn) throw badRequest('尚未配置 RingCentral 个人授权（连接与执行器 → RingCentral 个人授权）');
-    const me = await rcWhoAmI(conn).catch(() => null);
+    const personal = getConnections(user.id, 'rc_user');
+    const dirConn = pickDirectoryConnection(personal);
+    if (!dirConn) {
+      throw badRequest('尚未配置收件人目录：请配置 RingCentral 个人授权，或由部署管理员配置全局目录服务（service.env）');
+    }
+    const me = await rcWhoAmI({ ...dirConn, kind: 'user' }).catch(() => null);
     const tenant = String(me?.account?.id || 'default');
     const cached = directoryCacheGet(user.id, tenant, 'directory', q);
     if (cached) return { results: cached, tenant, cached: true };
-    const { results } = await rcDirectorySearch(conn, q);
+    const useGlobalPersons = Boolean(dirConn._global);
+    const { results: personResults } = await rcDirectorySearch(
+      { ...dirConn, kind: 'user' },
+      q,
+      { includeChats: !useGlobalPersons },
+    );
+    let results = personResults;
+    const bot = getConnections(user.id, 'rc_bot');
+    if (bot?.token && bot._verified !== -1) {
+      try {
+        const { results: botChats } = await rcDirectorySearch(
+          { ...bot, kind: 'bot' },
+          q,
+          { includePersons: false, includeChats: true },
+        );
+        const seen = new Set(results.map((r) => `${r.kind}:${r.id}`));
+        for (const row of botChats) {
+          const key = `${row.kind}:${row.id}`;
+          if (!seen.has(key)) results.push(row);
+        }
+      } catch {
+        // bot chat suggestions are best-effort
+      }
+    }
     directoryCachePut(user.id, tenant, 'directory', q, results);
-    return { results, tenant, cached: false };
+    return { results, tenant, cached: false, directorySource: dirConn._global ? 'global' : 'personal' };
   });
 
   // X3: bot picker — only names and verification state, never credentials.

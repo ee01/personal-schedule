@@ -54,6 +54,12 @@ export const config = {
   // base URL also prefills the connection editor.
   jiraGlobalBaseUrl: (process.env.SCHEDULE_JIRA_GLOBAL_BASE_URL || 'https://jira.ringcentral.com').replace(/\/+$/, ''),
   jiraGlobalToken: process.env.SCHEDULE_JIRA_GLOBAL_TOKEN || '',
+  // E-197: deployment-level RC REST app (JWT) for org-wide directory lookup
+  // only — never used as rc_user for AsMe dispatch or owner notifications.
+  rcGlobalServerUrl: (process.env.SCHEDULE_RC_GLOBAL_SERVER_URL || 'https://platform.ringcentral.com').replace(/\/+$/, ''),
+  rcGlobalClientId: process.env.SCHEDULE_RC_GLOBAL_CLIENT_ID || '',
+  rcGlobalClientSecret: process.env.SCHEDULE_RC_GLOBAL_CLIENT_SECRET || '',
+  rcGlobalJwt: process.env.SCHEDULE_RC_GLOBAL_JWT || '',
   // Deployment admins (SCHEDULE_ADMIN_EMAILS): the only identities allowed
   // to write deployment-level settings (timeline.*). Binding an email proves
   // account identity, NOT admin rights — default empty means the API accepts
@@ -80,14 +86,6 @@ export const config = {
   // without this flag, production must refuse email login ("邮件服务未配置")
   // — never generate usable codes into logs.
   authDevFallback: process.env.SCHEDULE_AUTH_DEV_FALLBACK === '1',
-  // extension auto-login bridge (single-use, session-bound nonce; the PAT
-  // stays in the extension and never enters page JS). Off by default; enable
-  // with SCHEDULE_AUTH_LOGIN_BRIDGE=1. Enabled on this HTTP deployment by
-  // the owner's explicit decision (E-194): the PAT already travels over HTTP
-  // on every extension API call, so the bridge adds no new credential
-  // exposure — it adds one more PAT-authenticated call with the same surface.
-  authLoginBridgeEnabled: process.env.SCHEDULE_AUTH_LOGIN_BRIDGE === '1',
-  authBridgeNonceTtlSec: intEnv('SCHEDULE_AUTH_BRIDGE_NONCE_TTL_SEC', 120),
   // HTTP client
   httpTimeoutMs: intEnv('SCHEDULE_HTTP_TIMEOUT_MS', 20000),
 };

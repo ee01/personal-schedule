@@ -106,7 +106,19 @@ function fmtSpec(spec){
   return spec.kind;
 }
 
+async function ensureSession() {
+  let me = await api('/me');
+  if (me.status !== 200) {
+    await api('/auth/guest', { method: 'POST', body: '{}' });
+    me = await api('/me');
+  }
+  return me.status === 200 ? me.body : null;
+}
+
+const shareAuth = { stage: 'email', email: '', msg: '' };
+
 async function loadShare(){
+  state.session = await ensureSession();
   const { status, body } = await api(`/shares/${state.token}`);
   if (status !== 200) {
     // BUG-49: a revoked share gets its own honest, Chinese state — the raw
@@ -124,9 +136,8 @@ async function loadShare(){
     return;
   }
   state.data = body;
-  const me = await api('/me');
-  state.session = me.status === 200 ? me.body : null;
   render();
+  wireShareAuth();
 }
 
 const importedKey = (token) => { try { return JSON.parse(localStorage.getItem('ps-imported-' + token) || '[]'); } catch { return []; } };
@@ -147,26 +158,63 @@ function render(){
     <div class="card">
       <h1>「${esc(d.sourceTagName)}」任务包</h1>
       <div class="sub">实时视图 · ${d.tasks.length} 个任务 · 分组变化会实时反映在本页 · 导入后为你的独立副本（不含发送方凭证/历史）</div>
-      ${state.session?'':`<div class="hint" style="margin-bottom:10px">导入需要你的 Personal Schedule 身份：先在下方登录（或在已安装的 Personal AI 扩展中导入）。</div>`}
-      <div class="row" style="margin-bottom:14px">
-        ${state.session
-          ? `<span class="hint">已登录：${state.session.isGuest ? '单设备身份（导入的任务保存在这台设备的账户里）' : esc(state.session.email)}</span>`
-          : `<input type="password" id="login-token" placeholder="你的 Schedule API Token" style="flex:1;min-width:240px">
-             <button class="ghost" id="login-btn">登录</button>`}
+      <div class="hint" style="margin-bottom:10px">导入使用<b>本页浏览器会话</b>（与 Personal AI 扩展勾选导入相同）。推荐绑定邮箱；单设备身份也可直接导入到本机。</div>
+      <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-direction:column;gap:8px" id="share-auth">
+        ${state.session && !state.session.isGuest
+          ? `<span class="hint">已登录：${esc(state.session.email)}</span>`
+          : `<div>
+            <div class="hint">${state.session?.isGuest ? '当前为单设备身份，绑定邮箱后可在其他设备找回导入的任务。' : '建立身份以导入：'}</div>
+            ${shareAuth.stage === 'email'
+              ? `<div class="row" style="width:100%"><input type="email" id="share-auth-email" placeholder="you@ringcentral.com" style="flex:1;min-width:200px" value="${esc(shareAuth.email)}">
+                 <button id="share-auth-send">发送验证码</button></div>`
+              : `<div class="row" style="width:100%"><input class="mono" id="share-auth-code" placeholder="6 位验证码" maxlength="6" inputmode="numeric" style="flex:1;min-width:120px">
+                 <button id="share-auth-verify">验证并登录</button></div>
+                 <span class="hint">已发送到 ${esc(shareAuth.email)}</span>`}
+            <span class="hint" id="share-auth-msg">${esc(shareAuth.msg)}</span>
+            <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">高级：API Token 登录（调试）</summary>
+              <div class="row" style="margin-top:8px"><input type="password" id="login-token" placeholder="pst_…" style="flex:1;min-width:200px">
+              <button class="ghost" id="login-btn">登录</button></div></details>
+          </div>`}
       </div>
       ${tasksHtml}
       <div class="row" style="margin-top:14px">
-        <button id="import-btn" ${state.session?'':'disabled'}>导入选中任务</button>
+        <button id="import-btn" ${state.session ? '' : 'disabled'}>导入选中任务</button>
         <span class="hint" id="import-hint"></span>
       </div>
       <div id="import-result"></div>
     </div>`;
-  if (!state.session) document.getElementById('login-btn').onclick = async () => {
+  document.getElementById('import-btn').onclick = doImport;
+}
+
+function wireShareAuth() {
+  const send = document.getElementById('share-auth-send');
+  const verify = document.getElementById('share-auth-verify');
+  const loginBtn = document.getElementById('login-btn');
+  if (send) send.onclick = async () => {
+    const email = (document.getElementById('share-auth-email').value || '').trim();
+    if (!email) { shareAuth.msg = '请输入邮箱'; render(); wireShareAuth(); return; }
+    shareAuth.email = email;
+    const r = await api('/auth/email/request', { method: 'POST', body: JSON.stringify({ email }) });
+    if (r.status !== 200) { shareAuth.msg = '发送失败：' + (r.body.error || r.status); render(); wireShareAuth(); return; }
+    shareAuth.stage = 'code'; shareAuth.msg = ''; render(); wireShareAuth();
+    document.getElementById('share-auth-code')?.focus();
+  };
+  if (verify) verify.onclick = async () => {
+    const code = (document.getElementById('share-auth-code').value || '').trim();
+    const r = await api('/auth/email/verify', { method: 'POST', body: JSON.stringify({ email: shareAuth.email, code }) });
+    if (r.status !== 200) { shareAuth.msg = '验证失败：' + (r.body.error || r.status); render(); wireShareAuth(); return; }
+  saveSelection();
+    toast(r.body?.mergedInto ? '登录成功：本机数据已合并' : '登录成功', 'ok');
+    shareAuth.stage = 'email'; shareAuth.msg = '';
+    await loadShare();
+    restoreSelection();
+  };
+  if (loginBtn) loginBtn.onclick = async () => {
     const token = document.getElementById('login-token').value.trim();
     const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ token }) });
-    if (r.status === 200) loadShare(); else toast('令牌无效，请检查后重试', 'err');
+    if (r.status === 200) { saveSelection(); await loadShare(); restoreSelection(); }
+    else toast('令牌无效，请检查后重试', 'err');
   };
-  document.getElementById('import-btn').onclick = doImport;
 }
 
 async function doImport(){
@@ -220,10 +268,8 @@ function renderImportResult(r, opts) {
 // with this page's origin as the target. The page listens and never replies on
 // that channel — the old 'personal-schedule' window channel is retired (its
 // handler replied to every message and echoed indefinitely). Credentials and
-// imports go through authenticated extension runtime messaging; the
-// extension builds its own receiver-owned import panel from the /share/:token
-// URL. This page's own login+import below stays equivalent for no-extension
-// users.
+// imports use the same cookie session as this page (credentials: include).
+// The extension content script on /share/:token does the same — no PAT.
 const extState = { phase: 'install', version: null }; // install → waiting → ready | upgrade
 
 function versionOlder(version, min) {
@@ -280,7 +326,7 @@ function renderExtPhase() {
       <div class="ext-step"><span class="n">02</span><div>回到本页</div><div class="hint">本页自动继续，无需重新确认</div></div>
     </div>
     <div class="row"><span class="pill live"><span class="dot"></span>等待扩展${up ? '更新' : '安装'}完成…</span></div>
-    <div class="hint" style="margin-top:8px">也可以继续用页面登录 + 勾选导入（下方），两者等价。</div>`;
+    <div class="hint" style="margin-top:8px">未装扩展时可在下方用邮箱登录并勾选导入；装好扩展后会在本页出现导入面板。</div>`;
 }
 
 window.addEventListener('message', (event) => {
@@ -297,6 +343,7 @@ window.addEventListener('message', (event) => {
 
 let extInfo = { extInstallUrl: null, handshake: null };
 async function boot() {
+  try { sessionStorage.setItem('ps-pending-share', location.pathname); } catch { /* unavailable */ }
   const info = await api('/extension/info');
   if (info.status === 200) extInfo = { ...extInfo, ...info.body };
   await loadShare();

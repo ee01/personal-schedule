@@ -14,7 +14,7 @@ const PORT = 3987;
 const dataDir = fs.mkdtempSync('/tmp/e194-probe-');
 const server = spawn(process.execPath, ['src/server.js'], {
   cwd: process.cwd(),
-  env: { ...process.env, SCHEDULE_PORT: String(PORT), SCHEDULE_HOST: '127.0.0.1', SCHEDULE_DATA_DIR: dataDir, SCHEDULE_AUTH_LOGIN_BRIDGE: '1' },
+  env: { ...process.env, SCHEDULE_PORT: String(PORT), SCHEDULE_HOST: '127.0.0.1', SCHEDULE_DATA_DIR: dataDir },
   stdio: 'ignore',
 });
 const base = `http://127.0.0.1:${PORT}`;
@@ -93,67 +93,8 @@ try {
   ok(!(await visible('#sideScrim')), 'no scrim on desktop');
   ok(!(await visible('#sideClose')), 'no close button on desktop');
 
-  console.log('== seamless extension flow (E2E, simulated extension) ==');
-  // real account via the same CLI the deployment uses
-  const cli = (args) => spawnSync(process.execPath, ['src/cli.js', ...args], {
-    cwd: process.cwd(), env: { ...process.env, SCHEDULE_DATA_DIR: dataDir }, encoding: 'utf8',
-  });
-  cli(['user', 'add', 'bridge.probe@ringcentral.com', 'probe']);
-  const tokOut = cli(['token', 'create', 'bridge.probe@ringcentral.com', 'seed-pat']).stdout;
-  const seedTok = (JSON.parse(tokOut).token || '').trim();
-  ok(/^pst_/.test(seedTok), 'account PAT minted via CLI');
   const meta2 = await (await fetch(base + '/api/v1/auth/meta')).json();
-  ok(meta2.loginBridge?.enabled === true, 'meta advertises the login bridge');
-
-  // simulated extension, passive flow (E-194 seamless): when the page session
-  // is a REAL account it auto-binds (mints a device PAT from the session);
-  // when the session is single-device and a device PAT exists it exchanges a
-  // nonce and reloads. The PAT lives in the probe (extension side), never in
-  // page JS — the exchange fetch is passed in as an argument.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(async (token) => {
-    // log the (cookieless) page session in as the real account: the web
-    // 绑定邮箱 path ends in exactly this session state
-    const r = await fetch('/api/v1/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
-    return r.status;
-  }, seedTok);
-  const meLoggedIn = await page.evaluate(async () => (await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })).json());
-  ok(meLoggedIn.email === 'bridge.probe@ringcentral.com' && meLoggedIn.isGuest === false, 'web login puts the session on the real account');
-  // auto-bind: the extension mints its own device credential from the session
-  const device = await page.evaluate(async () => {
-    const r = await fetch('/api/v1/auth/tokens', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'probe device' }) });
-    return (await r.json()).token;
-  });
-  ok(/^pst_/.test(device), 'device credential auto-minted from the logged-in session');
-  // cookie-less revisit → fresh single-device session → seamless bridge login
-  await page.context().clearCookies();
-  await page.goto(base + '/');
-  let guestOk = false;
-  for (let i = 0; i < 20 && !guestOk; i += 1) {
-    guestOk = await page.evaluate(async () => {
-      const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-      return r.status === 200 && (await r.json()).isGuest === true;
-    }).catch(() => false);
-    if (!guestOk) await sleep(250);
-  }
-  ok(guestOk, 'cookie-less revisit boots a single-device session');
-  // the extension's passive exchange: register + exchange (PAT from the
-  // extension side, page cookie jar attached) → session becomes the account
-  const ex = await page.evaluate(async (token) => {
-    const nonce = (crypto.randomUUID ? crypto.randomUUID() : 'probe' + String(Math.random()).slice(2));
-    const reg = await fetch('/api/v1/auth/bridge/register', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nonce }) });
-    if (!reg.ok) return { status: reg.status };
-    const r = await fetch('/api/v1/auth/bridge/exchange', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ nonce }) });
-    return { status: r.status, body: await r.json().catch(() => ({})) };
-  }, device);
-  ok(ex.status === 200 && ex.body?.user?.email === 'bridge.probe@ringcentral.com', 'seamless bridge login exchanges the single-device session into the account');
-  const meFinal = await page.evaluate(async () => (await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })).json());
-  ok(meFinal.email === 'bridge.probe@ringcentral.com' && meFinal.isGuest === false, 'session is the real account after the seamless login');
-  // E-194: the identity pill must show the logged-in account name (not 单设备模式)
-  await page.goto(base + '/');
-  await page.waitForTimeout(900);
-  const pill = await page.locator('.brand-sub [data-menu="id-menu"]').innerText().catch(() => '');
-  ok(pill.includes('probe') && !pill.includes('单设备模式'), 'identity pill shows the logged-in account name after auto-login');
+  ok(meta2.emailLogin === true && meta2.loginBridge === undefined, 'auth meta is email-only (login bridge removed)');
 
   await browser.close();
 } finally {

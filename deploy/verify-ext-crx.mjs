@@ -7,7 +7,7 @@
 //   1. version >= EXPECT_MIN (first compatible candidate: 12.2.0)
 //   2. manifest content_scripts contain a Schedule entry whose matches cover
 //      the deployment origins (host matches, not just any script)
-//   3. background bundle contains the PERSONAL_SCHEDULE_BRIDGE handler
+//   3. contentScriptSchedule uses cookie-session share import (not background PAT bridge)
 //
 // Exit 0 only when every capability check passes — an HTTP 200 from the
 // store page alone proves nothing (the 11.1.0 package also returns 200).
@@ -20,7 +20,7 @@ import path from 'node:path';
 const EXT_ID = process.env.EXT_ID || 'kefnadjndpllbibeklhajjddgmlbafel';
 const EXPECT_MIN = process.env.EXPECT_MIN || '12.2.0';
 const REQUIRED_MATCH_HOSTS = (process.env.REQUIRED_HOSTS || 'schedule.xmnup.com,localhost,127.0.0.1').split(',').map((h) => h.trim()).filter(Boolean);
-const BRIDGE_MARKER = 'PERSONAL_SCHEDULE_BRIDGE';
+const SHARE_COOKIE_MARKER = "credentials:'include'";
 const SCHEDULE_SCRIPT = 'contentScriptSchedule';
 
 const ver = (v) => String(v || '0').split('.').map((p) => parseInt(p, 10) || 0);
@@ -64,13 +64,11 @@ const matchedHosts = REQUIRED_MATCH_HOSTS.filter((h) => scheduleCs.some((e) => (
 check('schedule-content-script', scheduleCs.length > 0 && matchedHosts.length === REQUIRED_MATCH_HOSTS.length,
   `${SCHEDULE_SCRIPT} present=${scheduleCs.length > 0}; host matches ${matchedHosts.join(',') || 'NONE'} (need ${REQUIRED_MATCH_HOSTS.join(',')})`);
 
-// 3. background bridge handler
-let bgHasBridge = false;
-for (const cand of ['background.js']) {
-  const p2 = path.join(pkg, cand);
-  if (fs.existsSync(p2) && fs.readFileSync(p2, 'utf8').includes(BRIDGE_MARKER)) bgHasBridge = true;
-}
-check('background-bridge', bgHasBridge, `${BRIDGE_MARKER} handler in background.js`);
+// 3. share import uses page cookies in the content script
+let shareCookieImport = false;
+const csPath = path.join(pkg, `${SCHEDULE_SCRIPT}.js`);
+if (fs.existsSync(csPath) && fs.readFileSync(csPath, 'utf8').includes(SHARE_COOKIE_MARKER)) shareCookieImport = true;
+check('share-cookie-import', shareCookieImport, `${SCHEDULE_SCRIPT}.js uses credentials:include for /api/v1/shares`);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 const failed = results.filter(([, ok]) => !ok);
